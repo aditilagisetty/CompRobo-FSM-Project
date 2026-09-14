@@ -35,6 +35,16 @@ class FiniteStateController(Node):
         # so we don't flip sides mid-behavior if both sides briefly qualify.
         self.follow_side = None
 
+        # drive_square state -- same time-based approach as
+        # drive_square_single_threaded.py, adapted to fit this node's
+        # existing per-tick run_loop instead of spinning up its own thread.
+        self.square_side_length = 1.0    # meters (1m x 1m square)
+        self.square_time_per_side = 5.0  # seconds
+        self.square_time_per_turn = 2.0  # seconds
+        self.square_executing_turn = False
+        self.square_turns_executed = 0
+        self.square_segment_start = None
+
     def process_bump(self, msg):
         self.bumped = bool(msg.left_front or msg.left_side
                             or msg.right_front or msg.right_side)
@@ -79,6 +89,8 @@ class FiniteStateController(Node):
             self.follow_side = None
 
     def run_loop(self):
+        previous_state = self.state
+
         if self.state == State.DRIVE_SQUARE:
             if self.bumped or self.obstacle_detected:
                 self.state = State.COLLISION_AVOIDANCE
@@ -91,6 +103,11 @@ class FiniteStateController(Node):
             if not self.wall_detected:
                 self.state = State.DRIVE_SQUARE
 
+        if self.state == State.DRIVE_SQUARE and previous_state != State.DRIVE_SQUARE:
+            # Restart timing on whichever segment we were on rather than
+            # counting the paused time (spent in another state) against it.
+            self.square_segment_start = None
+
         if self.state == State.DRIVE_SQUARE:
             self.handle_drive_square()
         elif self.state == State.COLLISION_AVOIDANCE:
@@ -99,8 +116,36 @@ class FiniteStateController(Node):
             self.handle_wall_following()
 
     def handle_drive_square(self):
-        # TODO: implement or delegate to drive_square logic
-        pass
+        """Drives a 1m x 1m square, using the same time-based approach as
+        drive_square_single_threaded.py. Adapted to a per-tick style (rather
+        than a dedicated Thread, as in drive_square.py) since that's what
+        this node's run_loop already is -- letting collision-avoidance and
+        wall-following interrupt/resume this state doesn't require any
+        extra thread coordination this way.
+        """
+        if self.square_turns_executed >= 4:
+            self.vel_pub.publish(Twist())
+            return
+
+        if self.square_segment_start is None:
+            self.square_segment_start = self.get_clock().now()
+
+        duration = (self.square_time_per_turn if self.square_executing_turn
+                    else self.square_time_per_side)
+        elapsed = self.get_clock().now() - self.square_segment_start
+
+        msg = Twist()
+        if elapsed > rclpy.time.Duration(seconds=duration):
+            if self.square_executing_turn:
+                self.square_turns_executed += 1
+            self.square_executing_turn = not self.square_executing_turn
+            self.square_segment_start = None
+            # leave msg as zero velocity so we stop briefly between segments
+        elif self.square_executing_turn:
+            msg.angular.z = (math.pi / 2) / duration
+        else:
+            msg.linear.x = self.square_side_length / duration
+        self.vel_pub.publish(msg)
 
     def handle_collision_avoidance(self):
         # Sensing is done -- this just stops the robot. TODO: consider

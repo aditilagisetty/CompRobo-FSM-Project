@@ -8,10 +8,11 @@
 #   "turning" (executing_turn=True). The transition out of a state fires
 #   purely on elapsed wall/sim time (get_clock().now() - start_time_of_segment
 #   exceeding segment_duration); there's no sensor input involved.
-# - It will NOT stop after the fourth side. turns_executed is incremented
-#   each time a turn finishes, but nothing ever checks turns_executed to
-#   halt the loop -- the timer keeps firing and the state keeps toggling
-#   forever, so the robot just keeps retracing the square indefinitely.
+# - As originally written, it did NOT stop after the fourth side:
+#   turns_executed was incremented each time a turn finished, but nothing
+#   checked it to halt the loop, so the timer kept firing and the state kept
+#   toggling forever. Fixed below by cancelling the timer once
+#   turns_executed reaches 4 and publishing a final stop command.
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
@@ -21,15 +22,15 @@ class DriveSquareSample1(Node):
     def __init__(self):
         super().__init__('drive_square_sample_1')
         self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.create_timer(0.1, self.run_loop)
+        self.timer = self.create_timer(0.1, self.run_loop)
         self.turns_executed = 0
         self.executing_turn = False
-        self.side_length = 0.5      # the length in meters of a square side
+        self.side_length = 1.0      # the length in meters of a square side (1m x 1m square)
         self.time_per_side = 5.0    # duration in seconds to drive the square side
         self.time_per_turn = 2.0    # duration in seconds to turn 90 degrees
         # start_time_of_segment indicates when a particular part of the square was
         # started (e.g., a straight segment or a turn)
-        self.start_time_of_segment = None   
+        self.start_time_of_segment = None
 
     def run_loop(self):
         """ In the run_loop we are essentially implementing what's known as a finite-state
@@ -63,6 +64,11 @@ class DriveSquareSample1(Node):
         if self.get_clock().now() - self.start_time_of_segment > rclpy.time.Duration(seconds=segment_duration):
             if self.executing_turn:
                 self.turns_executed += 1
+                if self.turns_executed >= 4:
+                    # square complete: stop for good instead of looping forever
+                    self.vel_pub.publish(Twist())
+                    self.timer.cancel()
+                    return
             # toggle the executing_turn Boolean (turn to not turn or vice versa)
             self.executing_turn = not self.executing_turn
             self.start_time_of_segment = None
