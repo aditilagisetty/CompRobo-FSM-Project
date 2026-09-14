@@ -21,8 +21,12 @@ setup(
     entry_points={
         'console_scripts': [
             'drive_square = ros_behaviors_fsm.drive_square:main',
+            'drive_square_single_threaded = ros_behaviors_fsm.drive_square_single_threaded:main',
             'emergency_stop = ros_behaviors_fsm.emergency_stop:main',
             'distance_emergency_stop = ros_behaviors_fsm.distance_emergency_stop:main',
+            'collision_avoidance = ros_behaviors_fsm.collision_avoidance:main',
+            'wall_follower = ros_behaviors_fsm.wall_follower:main',
+            'finite_state_controller = ros_behaviors_fsm.finite_state_controller:main',
         ],
     },
 )

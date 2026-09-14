@@ -5,6 +5,29 @@ This node encapsulates implements a simple time-based approach to driving the
 robot in a square.  The system makes use of a a special ``estop`` topic that
 can trigger the robot to automatically stop when the value is true is received
 on that topic.
+
+Day 4 annotation (multi-threaded sample):
+
+- run_loop runs once, start to finish, on its own Thread -- it isn't called
+  repeatedly like a timer callback. It blocks on sleep() between segments,
+  but that blocking happens on its own thread, so it never blocks the
+  handle_estop/process_scan callbacks, which run on rclpy.spin()'s thread.
+  Because e_stop is a threading.Event (thread-safe), the callback thread can
+  set it at any time regardless of what run_loop's thread is doing.
+- FSM: two states, "driving forward" and "turning left", alternated for 4
+  iterations. Transitions are time-based (fixed sleep durations), same as
+  Sample 1, just executed sequentially in a dedicated thread instead of a
+  timer callback.
+- When e-stop triggers, handle_estop/process_scan immediately publish a zero
+  Twist and set e_stop, so the robot stops quickly even if run_loop's thread
+  is mid-sleep. However, resuming is NOT handled correctly: handle_estop only
+  ever calls e_stop.set() when msg.data is True -- there is no `else:
+  self.e_stop.clear()` -- so once tripped, e_stop can never be cleared again,
+  even if a later message reports the obstacle is gone. The square-drawing
+  is stopped for good once e-stop fires.
+- It WILL stop after the fourth side (assuming no e-stop): the `for _ in
+  range(4)` loop simply exits and the thread ends after 4 forward+turn
+  pairs, unlike Sample 1 which loops forever.
 """
 import rclpy
 from rclpy.node import Node
