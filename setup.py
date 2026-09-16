@@ -26,6 +26,7 @@ setup(
             'distance_emergency_stop = ros_behaviors_fsm.distance_emergency_stop:main',
             'collision_avoidance = ros_behaviors_fsm.collision_avoidance:main',
             'wall_follower = ros_behaviors_fsm.wall_follower:main',
+            'obstacle_avoider = ros_behaviors_fsm.obstacle_avoider:main',
             'finite_state_controller = ros_behaviors_fsm.finite_state_controller:main',
         ],
     },
