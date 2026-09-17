@@ -49,6 +49,39 @@ class CollisionAvoidance(Node):
         self.k_attractive = 1.0      # TODO: tune
         self.k_repulsive = 1.0       # TODO: tune
 
+    # convert a desired angle to an actual reading we can use because 
+    # LaserScan stores msg.list as a flat list so reading i 
+    # corresponds to the angle msg.angle_min + i * msg.angle_increment
+    # so we want a function that does the reverse --> given an angle
+    # find the index in ranges that corresponds to it
+    def _range_at_angle(self, msg, degrees):
+        """Looks up the scan range closest to the degrees from the 
+        robots forward direction where 0 is straight ahead, 90 is 
+        facing left, and -90 is right
+        
+        Returns range, returns inf for missing readings."""
+
+        angle_rad = math.radians(degrees)
+        # back calculate to find range index
+        index = int(round((angle_rad - msg.angle_min) / msg.angle_increment))
+        # forces index to always be in valid range
+        index %= len(msg.ranges)
+        r = msg.ranges[index]
+        # return of 0 means there is no obsticle detected rather than
+        # there is an obstacle at distance 0 so return inf
+        return r if r > 0.0 else float('inf')
+
+    # do the _range_at_angle function for a large spread of angles
+    def _min_range_in_cone(self, msg, center_deg, half_width_deg):
+        """Smallest valid range within plus or minus half_width_deg of
+        center_deg such that a dropped reading cant hide an obstacle.
+        """
+        readings = [
+68:        self._range_at_angle(msg, center_deg + offset)
+69-        for offset in range(-half_width_deg, half_width_deg + 1)
+70-     ]
+71-     return min(readings)
+
     def process_bump(self, msg):
         self.bumped = bool(msg.left_front or msg.left_side or msg.right_front or msg.right_side)
 
