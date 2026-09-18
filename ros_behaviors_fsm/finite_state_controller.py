@@ -74,15 +74,16 @@ class FiniteStateController(Node):
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.obstacle_detected = self.front_range < self.stop_distance
 
-        left_range = self._range_at_angle(msg, 90)
+        left_range = self._range_at_angle(msg,90)
         right_range = self._range_at_angle(msg, -90)
         wall_on_left = left_range < self.wall_detect_distance
         wall_on_right = right_range < self.wall_detect_distance
         self.wall_detected = wall_on_left or wall_on_right
 
-        # Latch which side we're tracking so process_scan (and
-        # handle_wall_following, once you implement it) keep looking at a
-        # consistent side instead of jumping around every scan.
+        # we want to latch onto a side we are tracking so the process scan
+        # and wall following  look at a consistient side instead of 
+        # jumping around every scan
+        # MAKE SURE WALL FOLLOWING AGREES WITH THIS
         if self.wall_detected and self.follow_side is None:
             self.follow_side = 1 if wall_on_left else -1
         elif not self.wall_detected:

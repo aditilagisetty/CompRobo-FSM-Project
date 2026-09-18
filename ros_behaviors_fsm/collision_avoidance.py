@@ -77,21 +77,21 @@ class CollisionAvoidance(Node):
         center_deg such that a dropped reading cant hide an obstacle.
         """
         readings = [
-68:        self._range_at_angle(msg, center_deg + offset)
-69-        for offset in range(-half_width_deg, half_width_deg + 1)
-70-     ]
-71-     return min(readings)
+            self._range_at_angle(msg, center_deg + offset)
+            for offset in range(-half_width_deg, half_width_deg + 1)
+        ]
+        return min(readings)
 
     def process_bump(self, msg):
         self.bumped = bool(msg.left_front or msg.left_side or msg.right_front or msg.right_side)
 
     def process_scan(self, msg):
-        front_range = msg.ranges[0]
-        # TODO: consider more than a single range reading for robustness
-        self.too_close = 0.0 < front_range < self.stop_distance
+        self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
+        self.too_close = self.front_range < self.stop_distance
+
 
         if self.bumped or self.too_close:
-            # Hard-stop safety backstop -- something is already too close
+            # Hard-stop safety backstop bc something is already too close
             # for steering around it to make sense.
             self.vel_pub.publish(Twist())
             return
