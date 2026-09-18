@@ -116,13 +116,19 @@ class CollisionAvoidance(Node):
         forward attractive pull plus a repulsive contribution from every
         scan reading within self.influence_radius.
 
-        TODO: implement the repulsive sum. For each valid range r at angle
-        theta (0 = straight ahead) closer than self.influence_radius, add a
-        force pointing from the obstacle back toward the robot -- i.e. in
-        direction (-cos(theta), -sin(theta)) -- with magnitude that grows as
+        For each valid range r at angle theta closer than self.influence_radius
+        add a force pointing from the obstacle back toward the robot in
+        direction (-cos(theta), -sin(theta)) with magnitude that grows as
         r shrinks (e.g. k_repulsive * (1/r - 1/influence_radius)).
         """
-        net_x, net_y = self.k_attractive, 0.0  # forward pull only, so far
+        net_x, net_y = self.k_attractive, 0.0  # forward pull 
+        for i, r in emnumerate(msg.ranges):
+            if r >= self.influence_radius or r == 0.0:
+                continue
+            theta = msg.angle_min + i * msg.angle_increment
+            magnitude = self.k_repulsive * (1.0 / r - 1.0 / self.influence_radius)
+            net_x += magnitude * (-math.cos(theta))
+            net_y += magnitude * (-math.sin(theta))
         return net_x, net_y
 
     def publish_force_marker(self, x, y):
