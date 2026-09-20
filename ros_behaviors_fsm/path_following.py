@@ -12,8 +12,9 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
+from .a_star import plan_world_path
 from .angle_helpers import euler_from_quaternion
 from .room_map import DEFAULT_MAP_FILE, SavedMap
 
@@ -87,11 +88,16 @@ class PathFollower(Node):
         self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.path_pub = self.create_publisher(Path, 'drawn_path', path_qos)
+        # lets finite_state_controller.py know whether this node currently
+        # owns cmd_vel (active or paused-but-not-done, vs idle/done), so it
+        # knows when to step back and when to resume its own driving.
+        self.status_pub = self.create_publisher(String, 'path_following_status', 10)
         self.create_subscription(Odometry, 'odom', self.process_odom, 10)
         self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
         self.create_subscription(Bump, 'bump', self.process_bump, 10)
         self.create_subscription(Bool, 'estop', self.handle_estop, 10)
         self.create_timer(0.05, self.control_loop)
+        self.create_timer(0.1, self.publish_status)
 
     def process_odom(self, msg):
         self.x = msg.pose.pose.position.x
@@ -161,6 +167,11 @@ class PathFollower(Node):
             return f'paused ({reason}): waypoint {idx + 1}/{total}'
         return state
 
+    def publish_status(self):
+        with self.lock:
+            state = self.state
+        self.status_pub.publish(String(data=state))
+
     def control_loop(self):
         with self.lock:
             if self.state not in ('following', 'paused') or not self.have_odom:
@@ -222,6 +233,7 @@ class PathPainter:
         self.strokes = []
         self.waypoints = []
         self.bad_points = []
+        self.goal_click = None
 
         self.root = tk.Tk()
         self.root.title('Neato path painter')
@@ -229,7 +241,8 @@ class PathPainter:
         bar.pack(side=tk.TOP, fill=tk.X)
         for label, command in (('Go', self.go), ('Stop', self.stop),
                                ('Undo', self.undo), ('Clear', self.clear),
-                               ('Reload map', self.reload_map)):
+                               ('Reload map', self.reload_map),
+                               ('Plan (A*)', self.plan_astar)):
             tk.Button(bar, text=label, command=command).pack(side=tk.LEFT, padx=2, pady=2)
         self.status = tk.Label(bar, text='', anchor='w')
         self.status.pack(side=tk.LEFT, padx=10)
@@ -240,6 +253,7 @@ class PathPainter:
 
         self.canvas.bind('<ButtonPress-1>', self.on_press)
         self.canvas.bind('<B1-Motion>', self.on_drag)
+        self.canvas.bind('<ButtonPress-3>', self.on_click_goal)
         self.root.bind('<Return>', lambda e: self.go())
         self.root.bind('<space>', lambda e: self.stop())
         self.root.bind('<Control-z>', lambda e: self.undo())
@@ -266,6 +280,7 @@ class PathPainter:
         self.strokes = []
         self.waypoints = []
         self.bad_points = []
+        self.goal_click = None
         self.redraw()
         self.set_message(f'map: {self.node.map_file}  '
                          f'({width * self.map.resolution:.1f} x '
@@ -311,7 +326,16 @@ class PathPainter:
         self.strokes = []
         self.waypoints = []
         self.bad_points = []
+        self.goal_click = None
         self.redraw()
+
+    def on_click_goal(self, event):
+        if self.map is None:
+            return
+        self.goal_click = self.canvas_to_world(event.x, event.y)
+        self.redraw()
+        self.set_message(f'Goal set at ({self.goal_click[0]:.2f}, {self.goal_click[1]:.2f}). '
+                         'Press "Plan (A*)" to route there from the robot\'s current position.')
 
     def redraw(self):
         if self.map is None:
@@ -333,11 +357,37 @@ class PathPainter:
         for wx, wy in self.bad_points:
             x, y = self.world_to_canvas(wx, wy)
             self.canvas.create_oval(x - 8, y - 8, x + 8, y + 8, outline='#ff00ff', width=3)
+        if self.goal_click is not None:
+            x, y = self.world_to_canvas(*self.goal_click)
+            self.canvas.create_oval(x - 6, y - 6, x + 6, y + 6, outline='#9467bd', width=3, tags='goal')
 
     def plan(self):
         joined = [p for stroke in self.strokes for p in stroke]
         world = [self.canvas_to_world(cx, cy) for cx, cy in joined]
         return smooth_path(resample_path(world, self.node.waypoint_spacing))
+
+    def _follow_if_valid(self, waypoints, label):
+        """checks waypoints against the map for wall or obstacles and
+        updates self.waypoints and self.bad_points and redraws either way
+        starts following if the whole path is clear. 
+        
+        Returns True if it was accepted and handed to the robot
+        False if any waypoint was too close to an obstacle
+        """
+        radius = self.node.robot_radius
+        states = [self.map.cell_state_at(x, y, radius) for x, y in waypoints]
+        self.bad_points = [w for w, s in zip(waypoints, states) if s == 'occupied']
+        self.waypoints = waypoints
+        self.redraw()
+        if self.bad_points:
+            return False
+        unknown = states.count('unknown')
+        length = sum(math.hypot(b[0] - a[0], b[1] - a[1])
+                     for a, b in zip(waypoints, waypoints[1:]))
+        note = (f' ({unknown} waypoints are in unscanned area)' if unknown else '')
+        self.set_message(f'{label}: {len(waypoints)} waypoints, {length:.1f} m{note}')
+        self.node.follow(waypoints)
+        return True
 
     def go(self):
         if self.map is None:
@@ -346,22 +396,54 @@ class PathPainter:
         if len(waypoints) < 2:
             self.set_message('Draw a path first (click and drag on the map).')
             return
-        radius = self.node.robot_radius
-        states = [self.map.cell_state_at(x, y, radius) for x, y in waypoints]
-        self.bad_points = [w for w, s in zip(waypoints, states) if s == 'occupied']
-        self.waypoints = waypoints
-        self.redraw()
-        if self.bad_points:
-            self.set_message(f'{len(self.bad_points)} waypoint(s) (circled) are within '
-                             f'{radius:.2f} m of a wall or obstacle. Undo and redraw '
-                             'them further away.')
+        if self._follow_if_valid(waypoints, 'Going'):
             return
-        unknown = states.count('unknown')
-        length = sum(math.hypot(b[0] - a[0], b[1] - a[1])
-                     for a, b in zip(waypoints, waypoints[1:]))
-        note = (f' ({unknown} waypoints are in unscanned area)' if unknown else '')
-        self.set_message(f'Going: {len(waypoints)} waypoints, {length:.1f} m{note}')
-        self.node.follow(waypoints)
+
+        # the drawn path crosses a wall/obstacle -- fall back to A*, aiming
+        # for the same destination the drawing was headed toward, from
+        # wherever the robot actually is right now
+        n_bad = len(self.bad_points)
+        goal_xy = waypoints[-1]
+        if not self.node.have_odom:
+            self.set_message(f'{n_bad} waypoint(s) (circled) cross a wall or obstacle, and '
+                             "there's no odometry yet for A* to replan from. Redraw further "
+                             'from walls instead.')
+            return
+        self.set_message(f'{n_bad} waypoint(s) (circled) cross a wall or obstacle -- '
+                         'replanning with A* to the same destination...')
+        start_xy = (self.node.x, self.node.y)
+        world_path = plan_world_path(self.map, start_xy, goal_xy,
+                                     robot_radius=self.node.robot_radius)
+        if world_path is None:
+            self.set_message('A* also found no valid path to that destination -- '
+                             'try drawing to a different point.')
+            return
+        astar_waypoints = smooth_path(resample_path(world_path, self.node.waypoint_spacing))
+        if not self._follow_if_valid(astar_waypoints, 'A* (auto-replanned)'):
+            self.set_message(f'{len(self.bad_points)} waypoint(s) (circled) are too close to '
+                             'a wall even after A* replanning -- try a different destination.')
+
+    def plan_astar(self):
+        if self.map is None:
+            return
+        if self.goal_click is None:
+            self.set_message('Right-click a point on the map to set a goal first.')
+            return
+        if not self.node.have_odom:
+            self.set_message("No odometry yet -- can't plan from the robot's current position.")
+            return
+
+        start_xy = (self.node.x, self.node.y)
+        world_path = plan_world_path(self.map, start_xy, self.goal_click,
+                                     robot_radius=self.node.robot_radius)
+        if world_path is None:
+            self.set_message('A* found no path to that goal (blocked or unreachable).')
+            return
+
+        waypoints = smooth_path(resample_path(world_path, self.node.waypoint_spacing))
+        if not self._follow_if_valid(waypoints, 'A*'):
+            self.set_message(f'{len(self.bad_points)} waypoint(s) (circled) are too close to a '
+                             'wall after smoothing -- try a different goal.')
 
     def stop(self):
         self.node.cancel()

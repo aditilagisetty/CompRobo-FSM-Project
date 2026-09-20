@@ -79,8 +79,7 @@ class CollisionAvoidance(Node):
 
 
         if self.bumped or self.too_close:
-            # Hard-stop safety backstop bc something is already too
-            3 close
+            # Hard-stop safety backstop bc something is already too close
             # for steering around it to make sense.
             self.vel_pub.publish(Twist())
             return
@@ -93,8 +92,12 @@ class CollisionAvoidance(Node):
         # bigger angle needed to turn --> harder we need to turn
         # clamp so its not commanded to turn harder than it can
         vel.angular.z = max(-self.max_angular_speed, min(self.max_angular_speed, self.k_steer * desired_heading))
-        # drive forward unless smthn hits us, then just let the turn occur with no forward motion
-        vel.linear.x = self.forward_speed if net_x > 0 else 0.0
+        # forward speed should slowdown based on total strength of repulsion too
+        # repulsion_magnitude is large whenever anything is close in any direction 
+        # slowdown inversely proportional to repulsion
+        repulsion_magnitude = math.hypot(net_x - self.k_attractive, net_y)
+        slowdown = 1.0 / (1.0 + repulsion_magnitude)
+        vel.linear.x = self.forward_speed * slowdown if net_x > 0 else 0.0
         self.vel_pub.publish(vel)
 
         self.publish_force_marker(net_x, net_y)

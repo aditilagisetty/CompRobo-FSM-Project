@@ -23,7 +23,6 @@ setup(
             'drive_square = ros_behaviors_fsm.drive_square:main',
             'collision_avoidance = ros_behaviors_fsm.collision_avoidance:main',
             'wall_follower = ros_behaviors_fsm.wall_follower:main',
-            'line_following = ros_behaviors_fsm.line_following:main',
             'finite_state_controller = ros_behaviors_fsm.finite_state_controller:main',
             'teleop_scan = ros_behaviors_fsm.teleop_scan:main',
             'path_following = ros_behaviors_fsm.path_following:main',

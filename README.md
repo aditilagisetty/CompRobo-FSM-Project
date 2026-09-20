@@ -10,31 +10,35 @@ This section tracks what's left before this is submission-ready. Remove it
 once everything below is done.
 
 **Required, not yet done:**
-- [ ] Finish `collision_avoidance.py` -- this now combines two things: a
-      hard-stop safety backstop (bump, proximity, side-swipe trajectory --
-      still TODO) and continuous potential-fields steering around obstacles
-      that aren't critically close yet (also still TODO: the repulsive-force
-      sum and the force-to-steering conversion).
-- [ ] Finish `wall_follower.py` -- the proportional steering law itself is a
-      TODO. Also needs the `visualization_msgs/Marker` showing the detected
-      wall (**required** by the assignment for this behavior, not optional).
-- [ ] Write `line_following.py` (currently an empty file) -- this is the
-      self-designed behavior. The assignment requires the FSM to combine
-      **at least 3 behaviors, at least 1 of which is self-designed / outside
-      the in-class activities**. `drive_square`, `collision_avoidance`, and
-      `wall_follower` are all in-class behaviors (even with obstacle
-      avoidance folded into `collision_avoidance`), so `line_following`
-      needs to actually get built and wired into the FSM to meet that
-      requirement.
-- [ ] Wire `wall_follower` and `line_following` into
-      `finite_state_controller.py` as real states (currently only
-      `DRIVE_SQUARE` has real driving logic and `COLLISION_AVOIDANCE` just
-      hard-stops; `WALL_FOLLOWING` is a TODO stub and there's no
-      line-following state yet at all).
+- [ ] Finish `collision_avoidance.py`'s tuning -- the logic itself (hard-stop
+      backstop, potential-fields steering, side-swipe handling via the
+      repulsion-magnitude slowdown) is all implemented, but `k_attractive`,
+      `k_repulsive`, and `k_steer` are still untested placeholder values --
+      needs real Gazebo testing to tune.
+- [ ] Fix a real bug in `wall_follower.py` -- it checks
+      `msg.ranges[270] == self.distance_from_wall` (exact float equality
+      against a live sensor reading), which will essentially never be true.
+      This is likely why the commit history notes "simulation isn't
+      working." Also still needs the `visualization_msgs/Marker` showing the
+      detected wall (**required** by the assignment for this behavior).
+- [x] ~~Write a self-designed behavior~~ -- superseded the original
+      `line_following.py` idea (deleted, was an unused empty stub) with a
+      much bigger one: `teleop_scan.py` (drive around, build an
+      occupancy-grid map) + `room_map.py` (the map itself) + `a_star.py`
+      (search that map for a path) + `path_following.py` (a Tkinter GUI to
+      draw a path by hand *or* right-click a goal and have A* plan it, then
+      drive the result with pure-pursuit control, pausing on
+      bump/e-stop/obstacle). This is now wired into
+      `finite_state_controller.py` as a `PATH_FOLLOWING` state (see the FSM
+      section below) -- satisfies the "at least 1 self-designed behavior"
+      requirement on its own.
+- [ ] Wire `wall_follower` into `finite_state_controller.py` as a real state
+      (`WALL_FOLLOWING` is currently still a TODO stub there -- everything
+      else, including the new `PATH_FOLLOWING` state, is wired up).
 - [ ] Record every bag file in `bags/` (currently empty):
       `test_drive.bag`, `drive_square_demo.bag`,
       `collision_avoidance_demo.bag`, `wall_follower_demo.bag`,
-      `line_following_demo.bag`, `finite_state_controller_demo.bag`.
+      `path_following_demo.bag`, `finite_state_controller_demo.bag`.
       Use `ros2 bag record /accel /bump /odom /cmd_vel /scan /stable_scan
       /projected_stable_scan /tf /tf_static -o <name>` (see "How To Run").
 - [ ] Fill in the still-TODO write-up sections below: Behaviors 2-4's
@@ -45,7 +49,9 @@ once everything below is done.
       wants this to be portfolio-quality, not just text).
 - [ ] Test everything on the **physical Neato** -- everything so far has
       only been run in the Gazebo simulator, and the assignment requires
-      working robot code by the end, not just a working simulation.
+      working robot code by the end, not just a working simulation. The
+      `PATH_FOLLOWING` state chain in particular (map -> A* -> follow ->
+      FSM handoff) has never been run live at all, only unit-tested offline.
 
 ## Project Overview
 
@@ -124,33 +130,95 @@ TODO. Starting point: [wall_follower.py](ros_behaviors_fsm/wall_follower.py)
 (skeleton only -- proportional control logic not yet implemented). Still
 needs the required wall-detection `visualization_msgs/Marker`.
 
-### Behavior 4: Line Following (self-designed)
+### Behavior 4: Mapping + A* Path Planning + Path Following (self-designed)
 
 This is the behavior meant to satisfy the assignment's "at least one
-behavior outside class activities" requirement.
+behavior outside class activities" requirement. It's actually four pieces
+working together:
 
-TODO -- not started yet ([line_following.py](ros_behaviors_fsm/line_following.py)
-is currently an empty file).
+- [teleop_scan.py](ros_behaviors_fsm/teleop_scan.py): drive the robot by
+  keyboard while it builds an occupancy-grid map from the lidar (log-odds
+  Bayesian updates in [room_map.py](ros_behaviors_fsm/room_map.py)), saved
+  to disk as a standard PGM+YAML map pair.
+- [a_star.py](ros_behaviors_fsm/a_star.py): a global path planner over that
+  saved map -- inflates obstacles by the robot's radius (so found paths
+  keep its whole body clear of walls, not just its center point), then runs
+  A* search to find the shortest obstacle-free route between two points.
+- [path_following.py](ros_behaviors_fsm/path_following.py): a Tkinter GUI
+  (`PathPainter`) showing the saved map, where you can either draw a path by
+  hand or right-click to set a goal and click "Plan (A*)" to have it planned
+  automatically. Either way, the resulting waypoints get resampled/smoothed
+  and driven using pure-pursuit steering control, pausing (not stopping
+  outright) on bump/e-stop/obstacle-close and resuming once clear. If a
+  hand-drawn path crosses an obstacle, it automatically falls back to
+  planning an A* route to the same intended destination instead of just
+  rejecting the drawing.
+- TODO: write up the actual design decisions here once tested live (e.g.,
+  why pure-pursuit for path following, why occupancy-grid + A* rather than
+  a different mapping/planning approach, what the log-odds map update
+  parameters mean) -- everything above has been unit-tested offline (fake
+  maps, doorways of known width) but never run against the real sim/robot.
+
+**Demo:** TODO -- add a gif/video and link to `bags/path_following_demo`.
 
 ## Finite State Machine
 
 ### Overall Design
 
-TODO -- flesh out once behaviors 2-4 are implemented and actually wired into
-the FSM (currently only `DRIVE_SQUARE` has real behavior; the others are
-placeholders/TODOs -- see `finite_state_controller.py`). Draft design:
-
 - **States:** `DRIVE_SQUARE` (default), `COLLISION_AVOIDANCE` (entered on
-  bump or close-range obstacle -- now also handles steering around obstacles
-  that aren't critically close), `WALL_FOLLOWING` (entered when a wall is
-  detected nearby). TODO: add a `LINE_FOLLOWING` state once
-  `line_following.py` is implemented, plus its transition criteria.
-- **Transitions:** TODO -- define the actual sensor thresholds/logic for
-  each transition listed in the skeleton file's docstring.
+  bump or close-range obstacle -- also handles steering around obstacles
+  that aren't critically close, and side-swipe risks), `WALL_FOLLOWING`
+  (entered when a wall is detected nearby; steering law still TODO),
+  `PATH_FOLLOWING` (entered whenever the separate `path_following.py` node
+  is actively driving toward a goal or paused mid-path).
+- **Transitions:** `DRIVE_SQUARE` -> `COLLISION_AVOIDANCE` on bump or a
+  close-range front reading; back to `DRIVE_SQUARE` once clear.
+  `DRIVE_SQUARE` -> `WALL_FOLLOWING` when a wall is detected within
+  `wall_detect_distance`; back once it's no longer detected.
+  Any state -> `PATH_FOLLOWING` whenever `path_following.py` reports it's
+  `following` or `paused` (see coding strategy below); back to
+  `DRIVE_SQUARE` once it goes idle/done. `PATH_FOLLOWING` takes priority
+  over everything else -- if a path is actively being followed, the FSM
+  defers to it regardless of what state it would otherwise be in.
+
+### Coding Strategy
+
+Three of the four states (`DRIVE_SQUARE`, `COLLISION_AVOIDANCE`,
+`WALL_FOLLOWING`) are re-implemented directly inside
+`finite_state_controller.py` as methods on one `Node` -- a single-file,
+single-process design, since these three all just need direct sensor
+readings and a `cmd_vel` command each tick.
+
+`PATH_FOLLOWING` is different: it **chains a separate, independent node
+together with the state machine**, rather than reimplementing its logic
+inline. `path_following.py` keeps running exactly as it does standalone --
+its own `cmd_vel` publisher, its own bump/e-stop/obstacle pause logic, its
+own GUI. It additionally publishes a small `path_following_status` topic
+(`'idle'`/`'following'`/`'paused'`/`'done'`), which `finite_state_controller.py`
+subscribes to in order to know when to be in the `PATH_FOLLOWING` state.
+While in that state, the FSM's `handle_path_following()` deliberately
+**publishes nothing at all** -- the point is to hand off control entirely,
+since having both nodes react to the same sensors and publish competing
+`cmd_vel` commands at once would be worse than either one alone. This
+matches the "chain parallel nodes together" strategy the assignment
+explicitly calls out as a valid way to structure an FSM, and was a
+deliberate choice over reimplementing `path_following.py`'s pure-pursuit
+steering and Tkinter GUI inline, given how architecturally different that
+node already is from the other three states.
+
+**Capabilities and limitations:** the FSM can drive a square, safely stop
+or reroute around obstacles, and hand off to a fully-planned/hand-drawn
+path -- but the hand-off itself is not triggered by anything the robot
+senses in its environment (it's triggered by a human interacting with
+`path_following.py`'s GUI), which is a real limitation against the
+assignment's "each transition should be some condition you can reliably
+detect in the environment" guidance -- worth being upfront about in the
+final writeup rather than glossing over.
 
 ### Implementation Details
 
-TODO -- pointers to relevant code once the FSM is implemented.
+TODO -- pointers to relevant code once wall-following is wired up and
+everything's been tested live.
 
 ### Demonstration
 

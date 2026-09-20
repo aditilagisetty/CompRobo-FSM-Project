@@ -5,6 +5,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
 from neato2_interfaces.msg import Bump
 
 
@@ -12,6 +13,7 @@ class State(Enum):
     DRIVE_SQUARE = auto()
     COLLISION_AVOIDANCE = auto()
     WALL_FOLLOWING = auto()
+    PATH_FOLLOWING = auto()
 
 
 class FiniteStateController(Node):
@@ -21,6 +23,8 @@ class FiniteStateController(Node):
         self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.create_subscription(Bump, 'bump', self.process_bump, 10)
         self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
+        self.create_subscription(String, 'path_following_status',
+                                 self.process_path_following_status, 10)
         self.create_timer(0.1, self.run_loop)
 
         self.stop_distance = 0.3          # collision-avoidance trigger, in meters
@@ -30,10 +34,16 @@ class FiniteStateController(Node):
         self.front_range = float('inf')
         self.obstacle_detected = False
         self.wall_detected = False
+        self.left_clearance = float('inf')
+        self.right_clearance = float('inf')
         # +1 while following a wall on the robot's left, -1 on the right,
         # None when not currently following a wall. Latched in process_scan
         # so we don't flip sides mid-behavior if both sides briefly qualify.
         self.follow_side = None
+
+        # True whenever the separate path_following.py node is actively
+        # driving toward a goal 
+        self.path_following_active = False
 
         # drive_square state -- same time-based approach as
         # drive_square_single_threaded.py, adapted to fit this node's
@@ -48,6 +58,9 @@ class FiniteStateController(Node):
     def process_bump(self, msg):
         self.bumped = bool(msg.left_front or msg.left_side
                             or msg.right_front or msg.right_side)
+
+    def process_path_following_status(self, msg):
+        self.path_following_active = msg.data in ('following', 'paused')
 
     def _range_at_angle(self, msg, degrees):
         """Look up the scan range closest to `degrees` from the robot's
@@ -73,6 +86,8 @@ class FiniteStateController(Node):
     def process_scan(self, msg):
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.obstacle_detected = self.front_range < self.stop_distance
+        self.left_clearance = self._range_at_angle(msg, 45)
+        self.right_clearance = self._range_at_angle(msg, -45)
 
         left_range = self._range_at_angle(msg,90)
         right_range = self._range_at_angle(msg, -90)
@@ -92,7 +107,13 @@ class FiniteStateController(Node):
     def run_loop(self):
         previous_state = self.state
 
-        if self.state == State.DRIVE_SQUARE:
+        if self.path_following_active:
+            self.state = State.PATH_FOLLOWING
+        elif self.state == State.PATH_FOLLOWING:
+            # path_following.py just went idle resume normal FSM
+            # behavior starting from DRIVE_SQUARE
+            self.state = State.DRIVE_SQUARE
+        elif self.state == State.DRIVE_SQUARE:
             if self.bumped or self.obstacle_detected:
                 self.state = State.COLLISION_AVOIDANCE
             elif self.wall_detected:
@@ -115,6 +136,21 @@ class FiniteStateController(Node):
             self.handle_collision_avoidance()
         elif self.state == State.WALL_FOLLOWING:
             self.handle_wall_following()
+        elif self.state == State.PATH_FOLLOWING:
+            self.handle_path_following()
+
+    def handle_path_following(self):
+        """Intentionally does nothing. path_following.py is a separate node
+        with its own cmd_vel publisher and its own built-in bump/estop/
+        obstacle-close pause logic -- while it's active, this node
+        deliberately publishes nothing at all, rather than also reacting to
+        the same sensors and fighting path_following.py over cmd_vel (two
+        nodes publishing conflicting Twist messages at once). This is the
+        "chain parallel nodes together" FSM strategy: path_following.py
+        keeps running exactly as it does standalone, and this state machine
+        just tracks whether it's currently in control and steps aside.
+        """
+        pass
 
     def handle_drive_square(self):
         """Drives a 1m x 1m square, using the same time-based approach as
@@ -149,10 +185,14 @@ class FiniteStateController(Node):
         self.vel_pub.publish(msg)
 
     def handle_collision_avoidance(self):
-        # Sensing is done -- this just stops the robot. TODO: consider
-        # something more graceful (e.g., backing away or re-routing) if you
-        # want collision avoidance to do more than e-stop.
-        self.vel_pub.publish(Twist())
+        """Backs away from whatever triggered the stop while turning toward
+        whichever side has more space so the robot reroutes
+        """
+        vel = Twist()
+        vel.linear.x = -0.05   # m/s
+        turn_speed = 0.3       # rad/s
+        vel.angular.z = turn_speed if self.left_clearance > self.right_clearance else -turn_speed
+        self.vel_pub.publish(vel)
 
     def handle_wall_following(self):
         # self.follow_side (+1 = wall on the left, -1 = on the right) tells
