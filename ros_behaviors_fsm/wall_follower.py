@@ -23,20 +23,22 @@ class WallFollower(Node):
         # from the error between them.
         vel = Twist()
 
-        if (
-            msg.ranges[270] == self.distance_from_wall
-            and msg.ranges[315] == self.distance_from_wall / math.cos(math.pi / 2)
-            and msg.ranges[225] == self.distance_from_wall / math.cos(math.pi / 2)
-        ):
+        if any(math.isinf(r) or math.isnan(r) for r in msg.ranges[45:136]):
             vel.linear.x = self.forward_speed
-        else:
-            # TODO: replace with proportional control output
-            error1 = msg.ranges[270] - self.distance_from_wall
-            error_allign = msg.ranges[315] - msg.ranges[225]
+            vel.angular.z = 0.1
+            self.vel_pub.publish(vel)
+            return
 
-            # Calculation for the error in allignment along the wall
-            vel.linear.x = self.forward_speed
-            vel.angular.z = -(self.kp * error1) - (self.kp * error_allign)
+        error1 = msg.ranges[90] - self.distance_from_wall
+        error_allign = msg.ranges[45] - msg.ranges[135]
+
+        # Calculation for the error in allignment along the wall
+        vel.linear.x = float(self.forward_speed)
+        vel.angular.z = float(-(self.kp * error1) - (self.kp * error_allign))
+
+        # DEbug print statements
+        print(f"Angular Z: {vel.angular.z}")
+
         self.vel_pub.publish(vel)
 
 
