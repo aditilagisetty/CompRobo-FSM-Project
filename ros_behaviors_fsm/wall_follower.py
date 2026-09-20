@@ -1,11 +1,3 @@
-"""
-Wall Follower (skeleton)
---------
-TODO: pilot the Neato to move forward while keeping its heading parallel to
-the nearest wall, using proportional control on the angle/distance error
-computed from two or more laser scan measurements.
-"""
-
 import math
 import rclpy
 from rclpy.node import Node

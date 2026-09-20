@@ -1,24 +1,10 @@
 """
-Collision Avoidance (skeleton)
---------
+Collision Avoidance:
 Combines what used to be two separate behaviors:
-- Reactive stopping (bump-triggered / very-close-range triggered), from the
-  day 3 e-stop samples.
+- Reactive stopping (bump-triggered / very-close-range triggered)
 - Continuous steering around obstacles (potential fields) so the robot keeps
   moving and reroutes, rather than just halting, for anything that isn't an
   immediate emergency.
-
-Design: bump or a critically-close reading (< stop_distance) is treated as a
-hard-stop safety backstop -- no amount of steering is fast enough to matter
-at that range, so just stop. Anything farther out but within
-influence_radius contributes to a potential-fields steering command instead,
-so the robot reroutes around obstacles it sees coming rather than plowing
-forward and stopping only once it's already too close.
-
-Fill in the TODOs to actually implement the potential-field force
-computation and the force-to-steering conversion (see compute_potential_field
-and process_scan below), and decide on any additional hard-stop conditions
-called for by the assignment (e.g., a side-swipe trajectory).
 """
 import math
 
@@ -36,18 +22,19 @@ class CollisionAvoidance(Node):
         self.create_subscription(Bump, 'bump', self.process_bump, 10)
         self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
         self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        # Optional, but useful for seeing what the robot "thinks" in RViz:
-        # Add -> By topic -> collision_avoidance_force -> Marker.
         self.marker_pub = self.create_publisher(Marker, 'collision_avoidance_force', 10)
 
-        self.stop_distance = 0.3     # hard-stop trigger, in meters
+        self.stop_distance = 0.3     # hard-stop trigger in meters
         self.bumped = False
         self.too_close = False
 
         self.forward_speed = 0.1
-        self.influence_radius = 1.0  # meters; obstacles farther than this are ignored
+        self.influence_radius = 1.0  # meters -- obstacles farther than this are ignored
         self.k_attractive = 1.0      # TODO: tune
         self.k_repulsive = 1.0       # TODO: tune
+        # got from wall follower logic for proportional gain for turning net forces direction
+        self.k_steer = 1.0           # TODO: also tune -- P gain on head error
+        self.max_angular_speed = 1.0 # rad/s
 
     # convert a desired angle to an actual reading we can use because 
     # LaserScan stores msg.list as a flat list so reading i 
@@ -85,28 +72,29 @@ class CollisionAvoidance(Node):
     def process_bump(self, msg):
         self.bumped = bool(msg.left_front or msg.left_side or msg.right_front or msg.right_side)
 
+    # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.too_close = self.front_range < self.stop_distance
 
 
         if self.bumped or self.too_close:
-            # Hard-stop safety backstop bc something is already too close
+            # Hard-stop safety backstop bc something is already too
+            3 close
             # for steering around it to make sense.
             self.vel_pub.publish(Twist())
             return
 
         net_x, net_y = self.compute_potential_field(msg)
 
-        # TODO: convert the net (net_x, net_y) force vector -- in the
-        # robot's own frame, x = forward, y = left -- into an actual drive
-        # command. Roughly: desired_heading = atan2(net_y, net_x); steer
-        # proportionally toward it (angular.z), and drive forward at a
-        # speed related to net force magnitude (e.g. slow down if net_x is
-        # small/negative, meaning something is pushing back hard).
+        desired_heading = math.atan2(net_y, net_x) # force vector into angle
         vel = Twist()
-        vel.linear.x = self.forward_speed
-        vel.angular.z = 0.0
+        # proportional control -- self.k_steer * desired_heading
+        # bigger angle needed to turn --> harder we need to turn
+        # clamp so its not commanded to turn harder than it can
+        vel.angular.z = max(-self.max_angular_speed, min(self.max_angular_speed, self.k_steer * desired_heading))
+        # drive forward unless smthn hits us, then just let the turn occur with no forward motion
+        vel.linear.x = self.forward_speed if net_x > 0 else 0.0
         self.vel_pub.publish(vel)
 
         self.publish_force_marker(net_x, net_y)
@@ -122,7 +110,7 @@ class CollisionAvoidance(Node):
         r shrinks (e.g. k_repulsive * (1/r - 1/influence_radius)).
         """
         net_x, net_y = self.k_attractive, 0.0  # forward pull 
-        for i, r in emnumerate(msg.ranges):
+        for i, r in enumerate(msg.ranges):
             if r >= self.influence_radius or r == 0.0:
                 continue
             theta = msg.angle_min + i * msg.angle_increment
