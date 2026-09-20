@@ -15,6 +15,10 @@ once everything below is done.
       repulsion-magnitude slowdown) is all implemented, but `k_attractive`,
       `k_repulsive`, and `k_steer` are still untested placeholder values --
       needs real Gazebo testing to tune.
+- [x] ~~`finite_state_controller.py`'s `COLLISION_AVOIDANCE` state just
+      stops~~ -- now backs away and turns toward whichever side
+      (`left_clearance`/`right_clearance`, checked at `+/-45 deg`) has more
+      room, rather than freezing in place.
 - [ ] Fix a real bug in `wall_follower.py` -- it checks
       `msg.ranges[270] == self.distance_from_wall` (exact float equality
       against a live sensor reading), which will essentially never be true.
@@ -112,17 +116,21 @@ described here.
 
 ### Behavior 2: Collision Avoidance + Obstacle Avoidance
 
-TODO. Starting point: [collision_avoidance.py](ros_behaviors_fsm/collision_avoidance.py)
--- combines what would otherwise be two separate behaviors into one node:
+**Code status: logic-complete, pending tuning.** [collision_avoidance.py](ros_behaviors_fsm/collision_avoidance.py)
+combines what would otherwise be two separate behaviors into one node:
 reactive stopping (bump-triggered / critically-close-range triggered, from
 the day 3 e-stop approaches taught in class) as a hard-stop safety backstop,
 plus continuous potential-fields steering (constant forward attraction +
 per-scan-point repulsion, summed into a steering direction) for anything
 farther out that the robot can reroute around instead of just halting for.
-Subscriptions/publishers (including an optional force-vector
-`visualization_msgs/Marker` for debugging in RViz) are wired up; the
-repulsive-force sum and the force-to-steering-command conversion are left as
-TODOs to design and implement.
+The repulsive-force sum, the force-to-steering-command conversion, and a
+side-swipe safeguard (forward speed scales down with total repulsion
+magnitude, not just when the net force points backward, so a strong purely
+*lateral* push still slows the robot) are all implemented. A force-vector
+`visualization_msgs/Marker` is published for debugging in RViz. What's left:
+`k_attractive`/`k_repulsive`/`k_steer` are still untested placeholder values
+(`1.0` each) -- TODO: write up the actual design decisions and demo once
+tuned and tested live.
 
 ### Behavior 3: Wall Following
 
@@ -166,11 +174,19 @@ working together:
 ### Overall Design
 
 - **States:** `DRIVE_SQUARE` (default), `COLLISION_AVOIDANCE` (entered on
-  bump or close-range obstacle -- also handles steering around obstacles
-  that aren't critically close, and side-swipe risks), `WALL_FOLLOWING`
-  (entered when a wall is detected nearby; steering law still TODO),
-  `PATH_FOLLOWING` (entered whenever the separate `path_following.py` node
-  is actively driving toward a goal or paused mid-path).
+  bump or close-range obstacle), `WALL_FOLLOWING` (entered when a wall is
+  detected nearby; steering law still TODO), `PATH_FOLLOWING` (entered
+  whenever the separate `path_following.py` node is actively driving toward
+  a goal or paused mid-path).
+  Note: `finite_state_controller.py`'s own `COLLISION_AVOIDANCE` state is a
+  separate, simpler re-implementation from the standalone
+  `collision_avoidance.py` node above -- it backs away and turns toward
+  whichever side (`+/-45 deg`) has more clearance, rather than running the
+  full potential-fields computation. This is intentional (see "Coding
+  Strategy" below: these three states are re-implemented inline, not
+  delegated to the standalone files), but worth being explicit about in the
+  writeup so it doesn't read as if the FSM literally reuses
+  `collision_avoidance.py`'s code.
 - **Transitions:** `DRIVE_SQUARE` -> `COLLISION_AVOIDANCE` on bump or a
   close-range front reading; back to `DRIVE_SQUARE` once clear.
   `DRIVE_SQUARE` -> `WALL_FOLLOWING` when a wall is detected within
