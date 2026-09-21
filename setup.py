@@ -27,6 +27,7 @@ setup(
             'teleop_scan = ros_behaviors_fsm.teleop_scan:main',
             'path_following = ros_behaviors_fsm.path_following:main',
             'icp_localizer = ros_behaviors_fsm.icp_localizer:main',
+            'fsm_node = ros_behaviors_fsm.fsm_node:main',
         ],
     },
 )
