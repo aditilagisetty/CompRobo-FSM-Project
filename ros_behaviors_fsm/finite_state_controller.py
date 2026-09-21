@@ -36,6 +36,15 @@ class FiniteStateController(Node):
         self.wall_detected = False
         self.left_clearance = float('inf')
         self.right_clearance = float('inf')
+
+        self.wall_target_distance = 0.4   # meters to hold from the wall
+        self.wall_kp_distance = 1.0       # TODO: tune
+        self.wall_kp_align = 1.0          # TODO: tune
+        self.wall_max_angular = 0.5       # rad/s cap
+        self.wall_forward_speed = 0.1
+        self.wall_side_dist = float('inf')
+        self.wall_front_dist = float('inf')
+        self.wall_rear_dist = float('inf')
         # +1 while following a wall on the robot's left, -1 on the right,
         # None when not currently following a wall. Latched in process_scan
         # so we don't flip sides mid-behavior if both sides briefly qualify.
@@ -103,6 +112,11 @@ class FiniteStateController(Node):
             self.follow_side = 1 if wall_on_left else -1
         elif not self.wall_detected:
             self.follow_side = None
+
+        if self.follow_side is not None:
+            self.wall_side_dist = self._range_at_angle(msg, 90 * self.follow_side)
+            self.wall_front_dist = self._range_at_angle(msg, 45 * self.follow_side)
+            self.wall_rear_dist = self._range_at_angle(msg, 135 * self.follow_side)
 
     def run_loop(self):
         previous_state = self.state
@@ -194,13 +208,27 @@ class FiniteStateController(Node):
         vel.angular.z = turn_speed if self.left_clearance > self.right_clearance else -turn_speed
         self.vel_pub.publish(vel)
 
+    # if we are farther than .4 m from the wall, distance error is positive and robot turns towards it
+    # follow side only resets when no wall is detected on either side
     def handle_wall_following(self):
-        # self.follow_side (+1 = wall on the left, -1 = on the right) tells
-        # you which side to track. TODO: implement the actual steering law
-        # -- e.g., compare ranges at +/-45 deg and +/-135 deg on that side
-        # (see wall_follower.py) to compute a proportional correction to
-        # angular.z, then drive forward with that correction applied.
-        pass
+        vel = Twist()
+        vel.linear.x = self.wall_forward_speed
+        side = self.follow_side
+        if side is not None:
+            if math.isinf(self.wall_side_dist):
+                distance_error = 0.0
+            else:
+                distance_error = self.wall_side_dist - self.wall_target_distance
+            if math.isinf(self.wall_front_dist) or math.isinf(self.wall_rear_dist):
+                align_error = 0.0
+            else:
+                align_error = self.wall_front_dist - self.wall_rear_dist
+            turn = side * (self.wall_kp_distance * distance_error
+                        + self.wall_kp_align * align_error)
+            vel.angular.z = max(-self.wall_max_angular,
+                                min(self.wall_max_angular, turn))
+        self.vel_pub.publish(vel)
+        
 
 
 def main(args=None):
