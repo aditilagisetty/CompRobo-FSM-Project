@@ -22,7 +22,7 @@ class CollisionAvoidance(Node):
         super().__init__("collision_avoidance")
         self.create_subscription(Bump, "bump", self.process_bump, 10)
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.vel_pub = self.create_publisher(Twist, "cmd_vel_collision_avoidance", 10)
         self.marker_pub = self.create_publisher(Marker, "collision_avoidance_force", 10)
 
         self.stop_distance = 0.3  # hard-stop trigger in meters

@@ -18,58 +18,61 @@ class State(Enum):
 
 class FiniteStateController(Node):
     def __init__(self):
-        super().__init__('finite_state_controller')
+        super().__init__("finite_state_controller")
         self.state = State.DRIVE_SQUARE
-        self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.create_subscription(Bump, 'bump', self.process_bump, 10)
-        self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
-        self.create_subscription(String, 'path_following_status',
-                                 self.process_path_following_status, 10)
+        self.vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.create_subscription(Bump, "bump", self.process_bump, 10)
+        self.create_subscription(LaserScan, "scan", self.process_scan, 10)
+        self.create_subscription(
+            String, "path_following_status", self.process_path_following_status, 10
+        )
         self.create_timer(0.1, self.run_loop)
 
-        self.stop_distance = 0.3          # collision-avoidance trigger, in meters
+        self.stop_distance = 0.3  # collision-avoidance trigger, in meters
         self.wall_detect_distance = 0.75  # wall-following trigger, in meters
 
         self.bumped = False
-        self.front_range = float('inf')
+        self.front_range = float("inf")
         self.obstacle_detected = False
         self.wall_detected = False
-        self.left_clearance = float('inf')
-        self.right_clearance = float('inf')
+        self.left_clearance = float("inf")
+        self.right_clearance = float("inf")
 
-        self.wall_target_distance = 0.4   # meters to hold from the wall
-        self.wall_kp_distance = 1.0       # TODO: tune
-        self.wall_kp_align = 1.0          # TODO: tune
-        self.wall_max_angular = 0.5       # rad/s cap
+        self.wall_target_distance = 0.4  # meters to hold from the wall
+        self.wall_kp_distance = 1.0  # TODO: tune
+        self.wall_kp_align = 1.0  # TODO: tune
+        self.wall_max_angular = 0.5  # rad/s cap
         self.wall_forward_speed = 0.1
-        self.wall_side_dist = float('inf')
-        self.wall_front_dist = float('inf')
-        self.wall_rear_dist = float('inf')
+        self.wall_side_dist = float("inf")
+        self.wall_front_dist = float("inf")
+        self.wall_rear_dist = float("inf")
         # +1 while following a wall on the robot's left, -1 on the right,
         # None when not currently following a wall. Latched in process_scan
         # so we don't flip sides mid-behavior if both sides briefly qualify.
         self.follow_side = None
 
         # True whenever the separate path_following.py node is actively
-        # driving toward a goal 
+        # driving toward a goal
         self.path_following_active = False
 
         # drive_square state -- same time-based approach as
         # drive_square_single_threaded.py, adapted to fit this node's
         # existing per-tick run_loop instead of spinning up its own thread.
-        self.square_side_length = 1.0    # meters (1m x 1m square)
+        self.square_side_length = 1.0  # meters (1m x 1m square)
         self.square_time_per_side = 5.0  # seconds
         self.square_time_per_turn = 2.0  # seconds
         self.square_executing_turn = False
         self.square_turns_executed = 0
         self.square_segment_start = None
 
+    # REMOVE LATER
     def process_bump(self, msg):
-        self.bumped = bool(msg.left_front or msg.left_side
-                            or msg.right_front or msg.right_side)
+        self.bumped = bool(
+            msg.left_front or msg.left_side or msg.right_front or msg.right_side
+        )
 
     def process_path_following_status(self, msg):
-        self.path_following_active = msg.data in ('following', 'paused')
+        self.path_following_active = msg.data in ("following", "paused")
 
     def _range_at_angle(self, msg, degrees):
         """Look up the scan range closest to `degrees` from the robot's
@@ -80,7 +83,7 @@ class FiniteStateController(Node):
         index = int(round((angle_rad - msg.angle_min) / msg.angle_increment))
         index %= len(msg.ranges)
         r = msg.ranges[index]
-        return r if r > 0.0 else float('inf')
+        return r if r > 0.0 else float("inf")
 
     def _min_range_in_cone(self, msg, center_deg, half_width_deg):
         """Smallest valid range within +/- half_width_deg of center_deg,
@@ -93,19 +96,22 @@ class FiniteStateController(Node):
         return min(readings)
 
     def process_scan(self, msg):
+        """
+        Process a LaserScan message to update the robot's state regarding obstacles and walls.
+        """
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.obstacle_detected = self.front_range < self.stop_distance
         self.left_clearance = self._range_at_angle(msg, 45)
         self.right_clearance = self._range_at_angle(msg, -45)
 
-        left_range = self._range_at_angle(msg,90)
+        left_range = self._range_at_angle(msg, 90)
         right_range = self._range_at_angle(msg, -90)
         wall_on_left = left_range < self.wall_detect_distance
         wall_on_right = right_range < self.wall_detect_distance
         self.wall_detected = wall_on_left or wall_on_right
 
         # we want to latch onto a side we are tracking so the process scan
-        # and wall following  look at a consistient side instead of 
+        # and wall following  look at a consistient side instead of
         # jumping around every scan
         # MAKE SURE WALL FOLLOWING AGREES WITH THIS
         if self.wall_detected and self.follow_side is None:
@@ -181,8 +187,11 @@ class FiniteStateController(Node):
         if self.square_segment_start is None:
             self.square_segment_start = self.get_clock().now()
 
-        duration = (self.square_time_per_turn if self.square_executing_turn
-                    else self.square_time_per_side)
+        duration = (
+            self.square_time_per_turn
+            if self.square_executing_turn
+            else self.square_time_per_side
+        )
         elapsed = self.get_clock().now() - self.square_segment_start
 
         msg = Twist()
@@ -203,9 +212,11 @@ class FiniteStateController(Node):
         whichever side has more space so the robot reroutes
         """
         vel = Twist()
-        vel.linear.x = -0.05   # m/s
-        turn_speed = 0.3       # rad/s
-        vel.angular.z = turn_speed if self.left_clearance > self.right_clearance else -turn_speed
+        vel.linear.x = -0.05  # m/s
+        turn_speed = 0.3  # rad/s
+        vel.angular.z = (
+            turn_speed if self.left_clearance > self.right_clearance else -turn_speed
+        )
         self.vel_pub.publish(vel)
 
     # if we are farther than .4 m from the wall, distance error is positive and robot turns towards it
@@ -223,12 +234,14 @@ class FiniteStateController(Node):
                 align_error = 0.0
             else:
                 align_error = self.wall_front_dist - self.wall_rear_dist
-            turn = side * (self.wall_kp_distance * distance_error
-                        + self.wall_kp_align * align_error)
-            vel.angular.z = max(-self.wall_max_angular,
-                                min(self.wall_max_angular, turn))
+            turn = side * (
+                self.wall_kp_distance * distance_error
+                + self.wall_kp_align * align_error
+            )
+            vel.angular.z = max(
+                -self.wall_max_angular, min(self.wall_max_angular, turn)
+            )
         self.vel_pub.publish(vel)
-        
 
 
 def main(args=None):
@@ -238,5 +251,5 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

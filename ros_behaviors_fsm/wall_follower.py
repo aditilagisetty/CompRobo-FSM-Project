@@ -9,7 +9,7 @@ class WallFollower(Node):
     def __init__(self):
         super().__init__("wall_follower")
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.vel_pub = self.create_publisher(Twist, "cmd_vel_wall_follower", 10)
         self.forward_speed = 0.1
         self.distance_from_wall = 1.0
         self.kp = (
