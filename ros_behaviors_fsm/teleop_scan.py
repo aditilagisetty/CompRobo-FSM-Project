@@ -3,6 +3,7 @@ import select
 import sys
 import termios
 import tty
+from collections import deque
 from threading import Thread
 
 import rclpy
@@ -52,6 +53,8 @@ class TeleopScan(Node):
         self.y = 0.0
         self.yaw = 0.0
         self.have_odom = False
+        self.odom_history = deque(maxlen=100)
+        self.spin_rate = 0.0
         self.scans_used = 0
         self.linear_cmd = 0.0
         self.angular_cmd = 0.0
@@ -70,12 +73,30 @@ class TeleopScan(Node):
         self.y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
         _, _, self.yaw = euler_from_quaternion(q.x, q.y, q.z, q.w)
+        self.spin_rate = abs(msg.twist.twist.angular.z)
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.odom_history.append((stamp, self.x, self.y, self.yaw))
         self.have_odom = True
 
+    def pose_at(self, stamp):
+        history = list(self.odom_history)
+        if len(history) < 2 or stamp < history[0][0]:
+            return None
+        for i in range(len(history) - 1, 0, -1):
+            t0, x0, y0, a0 = history[i - 1]
+            t1, x1, y1, a1 = history[i]
+            if t0 <= stamp:
+                f = min(1.0, (stamp - t0) / (t1 - t0)) if t1 > t0 else 1.0
+                da = math.atan2(math.sin(a1 - a0), math.cos(a1 - a0))
+                return x0 + f * (x1 - x0), y0 + f * (y1 - y0), a0 + f * da
+
     def process_scan(self, msg):
-        if not self.have_odom:
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        pose = self.pose_at(stamp)
+        # a fast spin smears the map, odom yaw is too rough for it
+        if pose is None or self.spin_rate > 0.4:
             return
-        self.room_map.add_scan(self.x, self.y, self.yaw, msg.ranges,
+        self.room_map.add_scan(pose[0], pose[1], pose[2], msg.ranges,
                                msg.angle_increment, msg.range_min,
                                msg.range_max, self.lidar_offset_x)
         self.scans_used += 1

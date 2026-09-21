@@ -61,7 +61,7 @@ class PathFollower(Node):
         self.declare_parameter('goal_tolerance', 0.08)
         self.declare_parameter('stop_distance', 0.25)
         self.declare_parameter('waypoint_spacing', 0.15)
-        self.declare_parameter('robot_radius', 0.16)
+        self.declare_parameter('robot_radius', 0.28)
         self.map_file = self.get_parameter('map_file').value
         self.linear_speed = self.get_parameter('linear_speed').value
         self.max_angular_speed = self.get_parameter('max_angular_speed').value
