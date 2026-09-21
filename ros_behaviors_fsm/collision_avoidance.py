@@ -32,16 +32,17 @@ class CollisionAvoidance(Node):
         self.forward_speed = 0.1
         self.influence_radius = 1.0  # meters -- obstacles farther than this are ignored
         self.k_attractive = 1.0  # TODO: tune
-        self.k_repulsive = 1.0  # TODO: tune
+        # the repulsion is summed over every ray while the pull is one
+        # constant so this has to be small
+        self.k_repulsive = 0.02  # TODO: tune
         # got from wall follower logic for proportional gain for turning net forces direction
         self.k_steer = 1.0  # TODO: also tune -- P gain on head error
         self.max_angular_speed = 1.0  # rad/s
 
-    # convert a desired angle to an actual reading we can use because
-    # LaserScan stores msg.list as a flat list so reading i
-    # corresponds to the angle msg.angle_min + i * msg.angle_increment
-    # so we want a function that does the reverse --> given an angle
-    # find the index in ranges that corresponds to it
+    # Ray i points i * msg.angle_increment counterclockwise from the robot's
+    # front. the simulator's header says -pi, but the
+    # lidar is mounted rotated 180 degrees, so ray 0 is the front - checked on
+    # the recorded bags
     def _range_at_angle(self, msg, degrees):
         """Looks up the scan range closest to the degrees from the
         robots forward direction where 0 is straight ahead, 90 is
@@ -51,9 +52,9 @@ class CollisionAvoidance(Node):
 
         angle_rad = math.radians(degrees)
         # back calculate to find range index
-        index = int(round((angle_rad - msg.angle_min) / msg.angle_increment))
-        # forces index to always be in valid range
-        index %= len(msg.ranges)
+        #wrap at one full turn 
+        rays_per_turn = round(2 * math.pi / msg.angle_increment)
+        index = int(round(angle_rad / msg.angle_increment)) % rays_per_turn
         r = msg.ranges[index]
         # return of 0 means there is no obsticle detected rather than
         # there is an obstacle at distance 0 so return inf
@@ -100,7 +101,8 @@ class CollisionAvoidance(Node):
         # forward speed should slowdown based on total strength of repulsion too
         # repulsion_magnitude is large whenever anything is close in any direction
         # slowdown inversely proportional to repulsion
-        repulsion_magnitude = math.hypot(net_x, net_y)
+        # subtract the constant forward pull so open space isn't counted as repulsion
+        repulsion_magnitude = math.hypot(net_x - self.k_attractive, net_y)
         slowdown = 1.0 / (1.0 + repulsion_magnitude)
         vel.linear.x = self.forward_speed * slowdown if net_x > 0 else 0.0
         self.vel_pub.publish(vel)
@@ -125,7 +127,7 @@ class CollisionAvoidance(Node):
             if not math.isfinite(r) or r <= 0.0 or r >= self.influence_radius:
                 continue
 
-            theta = msg.angle_min + i * msg.angle_increment
+            theta = i * msg.angle_increment  # angle from the front, see _range_at_angle
             magnitude = self.k_repulsive * (1.0 / r - 1.0 / self.influence_radius)
 
             net_x += magnitude * (-math.cos(theta))

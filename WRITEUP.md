@@ -8,7 +8,7 @@
 
 ## Project Overview
 
-This project programs a Neato robot (ROS 2 Jazzy, Gazebo Harmonic) to run several behaviors and switch between them with a finite state machine. The assignment asks for a set of reactive behaviors (stopping for obstacles, driving a shape, following a wall, and at least one of our own design) and a state machine that chooses among them. This repository is our solution, and everything so far has been run in the Gazebo simulator.
+This project programs a Neato robot (ROS 2 Jazzy, Gazebo Harmonic) to run several behaviors and switch between them with a finite state machine. The assignment asks for a set of reactive behaviors (stopping for obstacles, driving a shape, following a wall, and at least one of our own design) and a state machine that chooses among them. This repository is our solution. The drive-square, mapping and path-following nodes have been run in the Gazebo simulator, and (per the commit history) so were the standalone collision-avoidance and wall-following nodes, with mixed results described below. The state machine as a whole has not been run, and nothing has been tested on the physical robot. [What We Verified](#what-we-verified) lists exactly what was checked and how.
 
 The behaviors are:
 
@@ -56,15 +56,21 @@ Key design choices, each explained in the sections below:
 
 **What it does.** [collision_avoidance.py](ros_behaviors_fsm/collision_avoidance.py) combines two behaviors that the assignment lists separately: a hard e-stop, and steering around obstacles so the robot keeps moving. Bump or a reading closer than 0.3 m ahead stops the robot. Anything within 1.0 m otherwise pushes it away from the obstacle while it keeps driving.
 
-**Implementation.** The node subscribes to `bump` and `scan` and publishes `cmd_vel` plus a `visualization_msgs/Marker` arrow (`collision_avoidance_force`) showing the net force in RViz. The hard stop looks at the closest valid reading in a +/-10 degree cone ahead, not a single ray. Otherwise it builds a potential field: a constant forward pull plus, for every scan point closer than 1.0 m, a push away from that point with magnitude `k_repulsive * (1/r - 1/1.0)`, which grows as the obstacle gets closer and is zero at 1.0 m. The heading of the summed force, `atan2(net_y, net_x)`, drives a proportional steering command clamped to 1.0 rad/s. Forward speed is 0.1 m/s scaled by `1 / (1 + |repulsion|)`, and drops to zero if the net force points backward.
+**Implementation.** The node subscribes to `bump` and `scan` and publishes `cmd_vel` plus a `visualization_msgs/Marker` arrow (`collision_avoidance_force`) showing the net force in RViz. The hard stop looks at the closest valid reading in a +/-10 degree cone ahead, not a single ray. Otherwise it builds a potential field: a constant forward pull plus, for every scan point closer than 1.0 m, a push away from that point with magnitude `k_repulsive * (1/r - 1/1.0)`, which grows as the obstacle gets closer and is zero at 1.0 m. The heading of the summed force, `atan2(net_y, net_x)`, drives a proportional steering command clamped to 1.0 rad/s. Forward speed is 0.1 m/s scaled by `1 / (1 + |R|)`, where `|R|` is the length of the repulsion (the net force minus the constant forward pull, so open space gives the full 0.1 m/s), and drops to zero if the net force points backward.
 
 **Design decisions.**
 
 - *Stop and steer in one node.* A hard stop is right when something is already too close for steering to help. The field handles everything farther out, so the robot reroutes early instead of driving up to an obstacle and stopping.
-- *Slowdown scales with total repulsion, not just the forward component.* An obstacle directly to one side pushes almost entirely sideways, so the forward component alone would leave the robot at full speed while passing close to it. Scaling by the magnitude covers that side-swipe case.
-- *No-return readings are ignored.* Readings of `0.0` mean "no return" on this lidar, so they are excluded rather than treated as an obstacle at distance zero.
+- *Slowdown scales with the whole repulsion vector, not just its forward component.* An obstacle directly to one side pushes almost entirely sideways, so the forward component alone would leave the robot at full speed while passing close to it. Scaling by the vector's length covers that side-swipe case.
+- *No-return readings are skipped.* The simulator reports "no return" as `inf` (in the recorded bags about 1% of readings are `inf` and none are exactly `0.0`), and the code skips any reading that is not finite or not positive, so a missing reading is never treated as an obstacle at distance zero.
 
-**Status.** The logic is complete but `k_attractive`, `k_repulsive` and `k_steer` are still their initial value of 1.0 and have not been tuned in the simulator. The FSM's own `COLLISION_AVOIDANCE` state is a simpler separate implementation (see the FSM section).
+**Status: three bugs found and fixed in the code; not yet re-run in Gazebo.** The commit history records the original failure ("Collision avoidance is not working, the neato doesnt move forward"). We reproduced it offline by giving the node scans laid out like the simulator's, and found three causes:
+
+1. *The scan is indexed from the wrong direction.* The simulator's `/scan` has 361 rays and `angle_min = -pi`, but the lidar is mounted rotated by 180 degrees in the robot model (`neato_with_camera.sdf`), so ray 0 points at the front of the robot, not ray 180. We confirmed this two ways from the recorded bags. Treating ray 0 as the front makes the hits from many scans line up on the same walls (2,395 distinct 5 cm cells, versus 6,223 when `angle_min` is applied), and while the robot drives straight forward the range at ray 180 grows by 1.00 m per meter driven. The code turned a ray index into an angle with `angle_min + i * increment`, so it treated ray 180 as the front. The hard-stop cone looked behind the robot (an obstacle 0.25 m ahead did not trigger it, and the robot kept creeping forward), and the whole force field was rotated 180 degrees (a wall on the left pushed the robot into it).
+2. *The slowdown counted the forward pull as repulsion.* After the latest commit the length used for the slowdown included the constant attraction, so open space gave 0.05 m/s instead of 0.10.
+3. *The repulsion is a sum over every ray, while the attraction is one constant.* With `k_repulsive = 1.0`, a wall 0.5 m to one side cut the forward speed to about 0.002 m/s, so the robot effectively did not move near walls.
+
+**The fixes.** Ray `i` is now at angle `i * angle_increment` from the front, both in `_range_at_angle` (wrapping at 360 rays per turn, not 361) and in the force sum. The slowdown again subtracts the forward pull, and `k_repulsive` is 0.02 as a starting value. On scans laid out like the simulator's this gives 0.10 m/s in open space, a hard stop for an obstacle 0.25 m ahead, and a turn away from a wall 0.5 m to either side at 0.055 m/s. On the 480 real scans in the two bags, the hard-stop cone matched the ray-0 window every time. These are checks of the code, not of the robot: it has not been re-run in Gazebo and `k_repulsive` is not tuned. Two design limits remain. The hard stop has no recovery motion, and a wall dead ahead is symmetric, so the field produces no steering until the hard stop triggers. The FSM's own `COLLISION_AVOIDANCE` state is a simpler separate implementation; it had the same scan-indexing bug, now fixed (see the FSM section).
 
 **Demo.** Bag: TODO (`bags/collision_avoidance_demo`). It should show both a bump-triggered stop and a lidar-triggered stop.
 
@@ -74,12 +80,14 @@ Key design choices, each explained in the sections below:
 
 **Implementation.** Two implementations exist and they differ.
 
-- [wall_follower.py](ros_behaviors_fsm/wall_follower.py) is the standalone node. It follows a wall on the robot's left, using the scan readings at 90 degrees (distance) and 45 and 135 degrees (alignment). `angular.z = kp * (side_reading - target) + kp * (front_diagonal - rear_diagonal)` with `kp = 0.5` and a 1.0 m target. If the front reading is 1.0 m or closer it stops and turns right (away from the wall); if any reading between 45 and 135 degrees is missing it drives forward while turning slowly left to look for the wall.
+- [wall_follower.py](ros_behaviors_fsm/wall_follower.py) is the standalone node. It follows the closer of the two side walls (the left if only the left is visible or both are equally close, otherwise the right; it re-picks on every scan). It uses three readings on that side, at 90 degrees (distance) and 45 and 135 degrees (alignment), read directly by index (0 is the front, 90 the left, 270 the right, which matches the simulator's scan layout). `angular.z = kp * (side_reading - target) + kp * (front_diagonal - rear_diagonal)` for a left wall, and the negative of that for a right wall, with `kp = 0.5` and a 1.0 m target. If the front reading is 0.8 m or closer it stops and turns away from the wall at 0.4 rad/s; if any of the three readings is missing it drives forward at 0.1 m/s while turning slowly (0.1 rad/s) toward the wall's side to look for it.
 - The FSM's `WALL_FOLLOWING` state in [finite_state_controller.py](ros_behaviors_fsm/finite_state_controller.py) handles a wall on either side. It latches which side the wall is on (`follow_side`, +1 left and -1 right) and reads the same three angles mirrored to that side. The turn is `follow_side * (kp_distance * (side - 0.4) + kp_align * (front - rear))`, clamped to 0.5 rad/s.
 
-**Design decisions.** The alignment term (`front - rear`) is zero when the robot is parallel, and if the nose points into the wall the front diagonal shrinks, which turns the robot away. Missing readings contribute zero error instead of a garbage correction. We checked the FSM version's steering directions against synthetic scans (left and right wall, too close, too far, nose toward the wall, a missing reading), and the sign is correct in each case.
+**Design decisions.** The alignment term (`front - rear`) is zero when the robot is parallel, and if the nose points into the wall the front diagonal shrinks, which turns the robot away. Missing readings contribute zero error instead of a garbage correction. We checked the steering directions against synthetic scans. The standalone version steers correctly on both sides (wall parallel at the target, too close, too far) and turns away from an obstacle ahead. The FSM version now does too with the simulator's real scan layout; before the scan-indexing fix described under Behavior 2 it steered the wrong way in every case we tried.
 
-**Status.** Neither version has been tuned or run against a wall in the simulator, and neither publishes the wall-detection `Marker` the assignment asks for. The two use different target distances (1.0 m versus 0.4 m), so they will not behave identically.
+**Status.** According to the commit history the standalone version was run in the simulator ("Woks on both sides, but it is a bit choppy"); there is no bag of it yet. One possible cause of the choppiness that we did not test is that it re-picks the side on every scan, so it can switch walls when both are in range. It also still has unused variables (`is_turning`, `turn_start_time`, `turn_duration`), prints debug lines on every scan, and only filters `inf` and `nan` for the three wall readings, so a `0.0` reading would count as a wall at zero distance. The simulator does not produce `0.0` readings, but we have not checked the physical robot.
+
+The FSM version had the scan-layout problem described under Behavior 2: with the simulator's layout it picked the opposite side and turned away from a wall that was too far and toward one that was too close, for both left and right walls. That is fixed, and on synthetic scans it now picks the right side and steers correctly on both. It has not been tuned or run in Gazebo. Neither version publishes the wall-detection `Marker` the assignment asks for, and the two use different target distances (1.0 m versus 0.4 m), so they will not behave identically.
 
 **Demo.** Bag: TODO (`bags/wall_follower_demo`, recorded together with the wall marker topic).
 
@@ -89,7 +97,7 @@ This is our self-designed behavior. It lets a person drive the robot around a ro
 
 **Mapping.** [teleop_scan.py](ros_behaviors_fsm/teleop_scan.py) drives the robot from the keyboard (`w/s/a/d/q/e`, space to stop, `+/-` for speed, `m` to save) while [room_map.py](ros_behaviors_fsm/room_map.py) builds an occupancy grid from the lidar. Each scan updates a log-odds grid: cells along a beam become more likely free, and the cell where it ends becomes more likely occupied. The grid is published on `room_map` for RViz and saved as a standard PGM plus YAML pair (default `~/.ros/room_map.yaml`) in the `odom` frame.
 
-**Planning.** [a_star.py](ros_behaviors_fsm/a_star.py) plans over that saved map. Occupied cells are first inflated by the robot's radius, so a path keeps the whole robot clear of walls and not just its center. A* then searches 8-connected cells (diagonal steps cost sqrt(2)) using straight-line distance as the estimate, and returns waypoints in world coordinates. In offline tests on synthetic maps it routes through a doorway wide enough for the robot, refuses one that is too narrow, and returns nothing when the goal is walled off.
+**Planning.** [a_star.py](ros_behaviors_fsm/a_star.py) plans over that saved map. Occupied cells are first inflated by the robot's radius, so a path keeps the whole robot clear of walls and not just its center. A* then searches 8-connected cells (diagonal steps cost sqrt(2)) using straight-line distance as the estimate, and returns waypoints in world coordinates. In offline tests on synthetic maps it routes through a doorway wide enough for the robot, refuses one that is too narrow, and returns nothing when the goal is walled off. With the follower's 0.28 m safety radius (6 cells at 0.05 m per cell) a doorway has to be about 0.7 m wide: in a synthetic test 0.5 m was refused and 0.7 m was accepted. A start point inside the inflated zone (within 0.28 m of a wall) also returns no path, even though the robot is standing there.
 
 **Following.** [path_following.py](ros_behaviors_fsm/path_following.py) opens a Tkinter window showing the map. Drag with the left button to draw a route, then press *Go*; or right-click a goal and press *Plan (A\*)*. If a hand-drawn route crosses an obstacle, the node falls back to A* toward the same destination instead of refusing. Waypoints are resampled (0.15 m spacing) and smoothed, then followed with pure pursuit: aim at the point 0.3 m ahead along the path, steer proportionally (gain 1.5), turn in place when the heading error exceeds 50 degrees, and slow down near the goal. It pauses on a bump, an e-stop, or anything within 0.25 m ahead, and resumes when clear. It publishes the path on `drawn_path` and its state (`idle`, `following`, `paused`, `done`) on `path_following_status`.
 
@@ -147,6 +155,7 @@ What the data shows:
 
 ### Capabilities and Limitations
 
+- **Scan indexing (fixed; not yet re-run in Gazebo).** `_range_at_angle` used to convert an angle to a ray index using `angle_min`, but the simulator's front is ray 0 (see Behavior 2), so the FSM's obstacle, wall and clearance readings were 180 degrees off: an obstacle 0.2 m ahead did not leave `DRIVE_SQUARE`, one 0.2 m behind sent it to `COLLISION_AVOIDANCE`, a left wall was treated as a right wall, and `WALL_FOLLOWING` steered the wrong way. It now indexes from the front. With scans laid out like the simulator's, an obstacle ahead goes to `COLLISION_AVOIDANCE`, one behind is ignored, the wall side is right, and wall steering is correct on both sides. The transition logic itself already behaved as in Figure 4 (we stepped through 11 transitions; see What We Verified), so this was an input problem and not a logic problem.
 - The transition into `PATH_FOLLOWING` is not triggered by anything the robot senses. It starts when a person presses *Go* or *Plan (A\*)* in the GUI, which the FSM only sees through the status topic. The assignment asks for transitions that can be detected in the environment, so we note this as a real limitation of the design.
 - The FSM's `DRIVE_SQUARE` is the timed version, so it inherits the drift described in Behavior 1 (the odometry-based `drive_square.py` is not used inside the FSM), and after the fourth turn it just idles.
 - The standalone behavior nodes (`drive_square`, `collision_avoidance`, `wall_follower`) publish `cmd_vel` themselves and must not run at the same time as the FSM or each other.
@@ -158,6 +167,27 @@ What the data shows:
 ### Demonstration
 
 TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/finite_state_controller_demo`). The path-following handoff signal itself, `/path_following_status`, is present in [bags/path_following_demo](bags/path_following_demo).
+
+## What We Verified
+
+A check run on 2026-09-21 against synthetic inputs and the two recorded bags. Nothing here was run in Gazebo.
+
+| Check | How | Result |
+|---|---|---|
+| Build and entry points | `colcon build`, then import each of the 7 registered nodes | Builds; all 7 import and have a `main()` |
+| FSM transitions | Stepped `run_loop` through 11 events (obstacle, wall, bump, and path status `following`, `paused`, `done`) using scans with the front at ray 0 | Every step went to the state in Figure 4; `PATH_FOLLOWING` published nothing |
+| FSM with the simulator's scan layout | Same node, scans laid out like the simulator's | Before the scan-indexing fix: obstacle ahead missed, obstacle behind detected, wall side swapped, wall steering reversed. After: obstacle ahead detected, obstacle behind ignored, wall side and steering correct on both sides |
+| Standalone wall follower | Synthetic scans: left and right wall at, closer than, and farther than the target; obstacle ahead | Steering direction correct in every case |
+| Standalone collision avoidance | Synthetic scans laid out like the simulator's | Before the fix: fails as described in Behavior 2. After: 0.10 m/s in open space, hard stop for an obstacle 0.25 m ahead, turns away from a wall 0.5 m to either side at 0.055 m/s, straight down a corridor |
+| Collision avoidance on the recorded scans | Ran the fixed hard-stop cone against all 480 scans in the two bags | Cone matched the ray-0 window on every scan; no hard stops; forward speed above zero on 419 of 480 |
+| Scan layout and no-return value | Two tests on the recorded bags (see Behavior 2) | Front is ray 0; no-return is `inf`, never `0.0` |
+| A* | Synthetic map with a wall and a doorway, radius 0.28 m | Doorways of 0.1 and 0.5 m: no path. 0.7 and 1.0 m: path of 51 points. Sealed wall: none. Start inside the inflated zone: none |
+| ICP | Synthetic room, 5 cm map, start guesses up to 0.25 m and 0.2 rad off | Pose error 2.1 to 2.4 cm and 0.6 to 1.3 degrees |
+| Pure-pursuit controller | Closed loop with an ideal unicycle model (no acceleration limit): straight line, half circle, L-shaped path | Reached the goal within 4.6 to 7.3 cm (tolerance 8 cm) in 18 to 35 s |
+| Docs | Checked every local link and figure in both documents | All exist |
+| Style tests | `pytest test/` | `test_flake8` (152 issues) and `test_pep257` (137 issues) fail; `test_copyright` is skipped. They do not affect the robot |
+
+**Not checked:** Gazebo runs of the drive square, collision avoidance, wall following or the FSM, the `icp_localizer` node with a real map, the path-following GUI, the teleop keyboard loop, and the physical robot.
 
 ## Team Contributions
 
@@ -182,7 +212,7 @@ TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/fi
 - Timed motion did not survive contact with the simulator's acceleration limits. Finding that took logging target versus actual for every leg (the printed lines showed errors of a few centimeters and about a degree once it was fixed).
 - The first several explanations for "the square looks wrong" were about our controller. The controller was fine by odometry and RViz; what looked wrong was the Gazebo viewport. We never established why, which is a reminder that `/odom` in simulation is derived from the same wheel model and is not independent ground truth.
 - Behaviors written separately can collide. Several nodes publishing `cmd_vel` at once is easy to create by accident and needs an explicit handoff.
-- The same pitfall appeared in several files: a `0.0` lidar reading means "no return", not "obstacle at zero distance". It was handled in some files first and had to be fixed in others.
+- The simulator's scan layout is not what its header suggests. `/scan` says `angle_min = -pi` and has 361 rays, but the lidar is mounted rotated 180 degrees, so ray 0 is the front. Code that indexed from the front (drive square, wall follower, mapping, path following) works; code that trusted `angle_min` (collision avoidance and the FSM) looked backward until we fixed it. We only found this at the end, because our synthetic test scans used a different layout. We had also assumed missing readings show up as `0.0`; in the simulator they are `inf`.
 
 **What we would do with more time.**
 
@@ -197,7 +227,7 @@ TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/fi
 1. *Close the loop when the actuator has dynamics.* If the plant accelerates and decelerates slowly, open-loop timing fails silently. Measuring progress and tapering speed fixed what tuning the timing could not.
 2. *Check a surprising result against a second source before changing code.* The viewport, RViz and the controller's own log disagreed, and comparing them told us which one to distrust.
 3. *Give every actuator one owner at a time.* When independently written behaviors share `cmd_vel`, decide explicitly who is in control, as the FSM does with `path_following_status`.
-4. *Test the math offline with synthetic data.* The A* planner and the wall-following steering signs were checked against fake maps and fake scans, which caught mistakes in our own test setup as well as in the code, without waiting for a simulator run.
+4. *Test the math offline with synthetic data, but build the test inputs from a recording.* The A* planner and the steering signs were checked against fake maps and fake scans without waiting for a simulator run, which caught real mistakes. But our first fake scans had a different layout from the simulator's, so they passed code that fails on the real data. Check a sensor's layout against a recorded bag before writing the tests.
 5. *Chaining nodes is a legitimate FSM design.* When a behavior's architecture (a GUI, a map, its own safety logic) does not fit the others, handing off to it beats reimplementing it, as long as the handoff is clean.
 
 ## How To Run
@@ -252,7 +282,7 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 |---|---|
 | `ros_behaviors_fsm/drive_square.py` | Odometry-based square driving with e-stop |
 | `ros_behaviors_fsm/collision_avoidance.py` | Hard stop plus potential-field steering |
-| `ros_behaviors_fsm/wall_follower.py` | Standalone left-wall follower |
+| `ros_behaviors_fsm/wall_follower.py` | Standalone wall follower (left or right wall) |
 | `ros_behaviors_fsm/finite_state_controller.py` | The state machine |
 | `ros_behaviors_fsm/teleop_scan.py`, `room_map.py` | Keyboard driving and occupancy-grid mapping |
 | `ros_behaviors_fsm/a_star.py` | A* planner with obstacle inflation |
@@ -268,6 +298,9 @@ Still open at the time of writing:
 
 - [ ] Bags still to record: `test_drive`, `drive_square_demo`, `collision_avoidance_demo` (needs both a bump-triggered and a lidar-triggered stop), `wall_follower_demo` (also record the wall marker topic), `finite_state_controller_demo`. Already done: `path_following_demo`, `teleop_scan_demo`.
 - [ ] Wall-detection `Marker` (required by the assignment for wall following).
+- [x] Fix the scan indexing in `collision_avoidance.py` and `finite_state_controller.py`, the slowdown, and the `k_repulsive` scale (checked on synthetic scans and the recorded bags).
+- [ ] Re-run collision avoidance and the FSM in the simulator after that fix, and tune `k_repulsive`, `k_steer` and the wall-following gains. Add a recovery motion after the hard stop.
+- [ ] Decide whether to clean up the style-test failures in `test/`; they do not affect the robot.
 - [ ] Run the FSM end to end in the simulator, and tune the collision-avoidance and wall-following gains.
 - [ ] Test on the physical Neato.
 - [ ] Add gifs, video or bag graphs for the drive square, collision avoidance, wall following and FSM (Behaviors 1 to 3 and the FSM have no visual demonstration yet). After recording a bag, add it to `figure_*` functions in `docs/make_figures.py`.
