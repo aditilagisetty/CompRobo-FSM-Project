@@ -15,42 +15,86 @@ class WallFollower(Node):
         self.kp = (
             0.5  # TODO: tune this proportional gain to get good wall-following behavior
         )
+        self.follow_side = (
+            1  # +1 for left wall, -1 for right wall, None for no wall detected
+        )
+
+        self.is_turning = False
+        self.turn_start_time = None
+        self.turn_speed = 0.4  # rad/s
+        self.turn_duration = (math.pi / 2.0) / self.turn_speed
 
     def process_scan(self, msg):
-        # TODO: pick two (or more) laser measurements to estimate the angle
-        # between the robot's heading and the wall, e.g. msg.ranges[45] and
-        # msg.ranges[135], and compute a proportional steering correction
-        # from the error between them.
-        vel = Twist()
 
+        # Initial values declared
+        vel = Twist()
+        now = self.get_clock().now().nanoseconds / 1e9
         front_dist = msg.ranges[0]
 
-        if (
-            not math.isnan(front_dist)
-            and not math.isinf(front_dist)
-            and front_dist > 0.0
-        ):
-            # if the front distance is less than equal to 1.0 meters, stop the robot and turn left
-            if front_dist <= 1.0:
-                vel.linear.x = 0.0
-                vel.angular.z = -1.0
-                self.vel_pub.publish(vel)
-                return
+        r45 = msg.ranges[45]
+        r90 = msg.ranges[90]
+        r135 = msg.ranges[135]
+        r225 = msg.ranges[225]
+        r270 = msg.ranges[270]
+        r315 = msg.ranges[315]
 
-        if any(math.isinf(r) or math.isnan(r) for r in msg.ranges[45:136]):
-            vel.linear.x = self.forward_speed
-            vel.angular.z = 0.1
+        decided_angles = []
+
+        # This checks what wall is close to the neato and sets the follow side accordingly. If both walls are close, it will follow the left wall.
+        r90_valid = math.isfinite(r90) and r90 > 0.0
+        r270_valid = math.isfinite(r270) and r270 > 0.0
+
+        # This checks what wall is close to the neato and sets the follow side accordingly. If both walls are close, it will follow the left wall.
+        if r90_valid and r270_valid:
+            if r90 <= r270:
+                self.follow_side = 1  # Left side is closer
+            else:
+                self.follow_side = -1  # Right side is closer
+        elif r90_valid:
+            self.follow_side = 1  # Only left wall visible
+        elif r270_valid:
+            self.follow_side = -1  # Only right wall visible
+
+        # Assign the angles to be used for wall following based on the follow side
+        if self.follow_side == 1:
+            decided_angles = [r45, r90, r135]
+        else:
+            decided_angles = [r225, r270, r315]
+
+        if math.isfinite(front_dist) and 0.0 < front_dist <= 0.8:
+            self.is_turning = True
+            self.turn_start_time = now
+            vel.linear.x = 0.0
+            vel.angular.z = float(-1.0 * self.follow_side * self.turn_speed)
             self.vel_pub.publish(vel)
             return
 
-        error1 = msg.ranges[90] - self.distance_from_wall
-        error_allign = msg.ranges[45] - msg.ranges[135]
+        if any(
+            math.isinf(r) or math.isnan(r)
+            for r in [decided_angles[0], decided_angles[1], decided_angles[2]]
+        ):
+            vel.linear.x = self.forward_speed
+            vel.angular.z = float(self.follow_side * 0.1)
+            self.vel_pub.publish(vel)
+            return
+
+        error1 = decided_angles[1] - self.distance_from_wall
 
         # Calculation for the error in allignment along the wall
+        if self.follow_side == 1:
+            # Left Wall
+            error_align = decided_angles[0] - decided_angles[2]
+            steering = (self.kp * error1) + (self.kp * error_align)
+        else:
+            # Right Wall
+            error_align = decided_angles[2] - decided_angles[0]
+            steering = -1.0 * ((self.kp * error1) + (self.kp * error_align))
+
         vel.linear.x = float(self.forward_speed)
-        vel.angular.z = float((self.kp * error1) + (self.kp * error_allign))
+        vel.angular.z = float(steering)
 
         # DEbug print statements
+        print(f"Side: {'LEFT' if self.follow_side == 1 else 'RIGHT'}")
         print(f"Angular Z: {vel.angular.z}")
 
         self.vel_pub.publish(vel)
