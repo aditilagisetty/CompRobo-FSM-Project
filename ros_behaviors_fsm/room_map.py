@@ -146,12 +146,16 @@ class SavedMap:
 
     def cell_state_at(self, x, y, radius=0.0):
         col, row = self.world_to_pixel(x, y)
-        r_cells = int(math.ceil(radius / self.resolution))
-        c0, c1 = int(col) - r_cells, int(col) + r_cells + 1
-        r0, r1 = int(row) - r_cells, int(row) + r_cells + 1
+        col, row = int(round(col)), int(round(row))
+        # a cell tighter than the planner's inflation, so waypoints on its edge still pass
+        r_cells = 0 if radius <= 0 else max(1, int(round(radius / self.resolution)) - 1)
+        c0, c1 = col - r_cells, col + r_cells + 1
+        r0, r1 = row - r_cells, row + r_cells + 1
         if c0 < 0 or r0 < 0 or c1 > self.width or r1 > self.height:
             return 'unknown'
-        window = self.image[r0:r1, c0:c1]
+        offsets = np.arange(-r_cells, r_cells + 1)
+        inside = offsets[:, None] ** 2 + offsets[None, :] ** 2 <= r_cells ** 2
+        window = self.image[r0:r1, c0:c1][inside]
         if (window == PIXEL_OCCUPIED).any():
             return 'occupied'
         if (window == PIXEL_UNKNOWN).any():
