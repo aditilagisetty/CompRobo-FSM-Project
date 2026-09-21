@@ -79,9 +79,13 @@ class FiniteStateController(Node):
         forward direction (0 = straight ahead, 90 = left, -90 = right).
         Returns inf for missing/zero ("no return") readings.
         """
+        # Ray i points i * angle_increment counterclockwise from the front. Do not
+        # use msg.angle_min bc the sim's header says -pi, but the lidar is mounted
+        # rotated 180 degrees, so ray 0 is the front. Wrap at one full turn
+        # not len(ranges) the scan has 361 the last repeating ray 0
         angle_rad = math.radians(degrees)
-        index = int(round((angle_rad - msg.angle_min) / msg.angle_increment))
-        index %= len(msg.ranges)
+        rays_per_turn = round(2 * math.pi / msg.angle_increment)
+        index = int(round(angle_rad / msg.angle_increment)) % rays_per_turn
         r = msg.ranges[index]
         return r if r > 0.0 else float("inf")
 
