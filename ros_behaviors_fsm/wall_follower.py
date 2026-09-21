@@ -16,16 +16,19 @@ class WallFollower(Node):
             0.5  # TODO: tune this proportional gain to get good wall-following behavior
         )
         self.follow_side = (
-            None  # +1 for left wall, -1 for right wall, None for no wall detected
+            1  # +1 for left wall, -1 for right wall, None for no wall detected
         )
 
-    def process_scan(self, msg):
-        # TODO: pick two (or more) laser measurements to estimate the angle
-        # between the robot's heading and the wall, e.g. msg.ranges[45] and
-        # msg.ranges[135], and compute a proportional steering correction
-        # from the error between them.
-        vel = Twist()
+        self.is_turning = False
+        self.turn_start_time = None
+        self.turn_speed = 0.4  # rad/s
+        self.turn_duration = (math.pi / 2.0) / self.turn_speed
 
+    def process_scan(self, msg):
+
+        # Initial values declared
+        vel = Twist()
+        now = self.get_clock().now().nanoseconds / 1e9
         front_dist = msg.ranges[0]
 
         r45 = msg.ranges[45]
@@ -58,19 +61,13 @@ class WallFollower(Node):
         else:
             decided_angles = [r225, r270, r315]
 
-        if (
-            not math.isnan(front_dist)
-            and not math.isinf(front_dist)
-            and front_dist > 0.0
-        ):
-            # If the front distance is less than or equal to 1.0 meters, stop and turn away from the wall
-            if front_dist <= 1.0:
-                vel.linear.x = 0.0
-                vel.angular.z = float(
-                    self.follow_side * -0.1
-                )  # Turn left or right based on follow side
-                self.vel_pub.publish(vel)
-                return
+        if math.isfinite(front_dist) and 0.0 < front_dist <= 0.8:
+            self.is_turning = True
+            self.turn_start_time = now
+            vel.linear.x = 0.0
+            vel.angular.z = float(-1.0 * self.follow_side * self.turn_speed)
+            self.vel_pub.publish(vel)
+            return
 
         if any(
             math.isinf(r) or math.isnan(r)
@@ -82,13 +79,19 @@ class WallFollower(Node):
             return
 
         error1 = decided_angles[1] - self.distance_from_wall
-        error_allign = decided_angles[0] - decided_angles[2]
 
         # Calculation for the error in allignment along the wall
+        if self.follow_side == 1:
+            # Left Wall
+            error_align = decided_angles[0] - decided_angles[2]
+            steering = (self.kp * error1) + (self.kp * error_align)
+        else:
+            # Right Wall
+            error_align = decided_angles[2] - decided_angles[0]
+            steering = -1.0 * ((self.kp * error1) + (self.kp * error_align))
+
         vel.linear.x = float(self.forward_speed)
-        vel.angular.z = float(
-            self.follow_side * ((self.kp * error1) + (self.kp * error_allign))
-        )
+        vel.angular.z = float(steering)
 
         # DEbug print statements
         print(f"Side: {'LEFT' if self.follow_side == 1 else 'RIGHT'}")
