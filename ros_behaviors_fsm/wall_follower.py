@@ -61,7 +61,7 @@ class WallFollower(Node):
         else:
             decided_angles = [r225, r270, r315]
 
-        if math.isfinite(front_dist) and 0.0 < front_dist <= 0.8:
+        if math.isfinite(front_dist) and 0.0 < front_dist <= 1.0:
             self.is_turning = True
             self.turn_start_time = now
             vel.linear.x = 0.0

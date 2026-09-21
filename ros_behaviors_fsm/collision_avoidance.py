@@ -52,7 +52,7 @@ class CollisionAvoidance(Node):
 
         angle_rad = math.radians(degrees)
         # back calculate to find range index
-        #wrap at one full turn 
+        # wrap at one full turn
         rays_per_turn = round(2 * math.pi / msg.angle_increment)
         index = int(round(angle_rad / msg.angle_increment)) % rays_per_turn
         r = msg.ranges[index]
@@ -161,3 +161,6 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
+
+# TODO: after food 1) re build all the code and run again to debug
