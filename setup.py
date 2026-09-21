@@ -26,6 +26,7 @@ setup(
             'finite_state_controller = ros_behaviors_fsm.finite_state_controller:main',
             'teleop_scan = ros_behaviors_fsm.teleop_scan:main',
             'path_following = ros_behaviors_fsm.path_following:main',
+            'icp_localizer = ros_behaviors_fsm.icp_localizer:main',
         ],
     },
 )
