@@ -1,12 +1,14 @@
 # RoboBehaviors and Finite State Machines Project
 
-Author Names: Aditi Lagisetty and [teammate name]
+**Author Names:** Aditi, Duc, and Akil
 
-For Olin ENGR3590 Computational Introduction to Robotics
+**Course:** Olin ENGR3590 Computational Introduction to Robotics
+
+**Assignment:** [RoboBehaviors and Finite State Machines](https://comprobo26.github.io/assignments/warmup_project)
 
 ## Project Overview
 
-This project programs a Neato robot (ROS 2 Jazzy, Gazebo Harmonic) to run several behaviors and switch between them with a finite state machine. Assignment: [RoboBehaviors and FSMs](https://comprobo26.github.io/assignments/warmup_project).
+This project programs a Neato robot (ROS 2 Jazzy, Gazebo Harmonic) to run several behaviors and switch between them with a finite state machine. The assignment asks for a set of reactive behaviors (stopping for obstacles, driving a shape, following a wall, and at least one of our own design) and a state machine that chooses among them. This repository is our solution, and everything so far has been run in the Gazebo simulator.
 
 The behaviors are:
 
@@ -25,15 +27,11 @@ Key design choices, each explained in the sections below:
 - **Potential fields for collision avoidance.** The robot steers around obstacles it can see coming and keeps a hard stop only as a last resort.
 - **A separate node for path following, chained into the FSM.** It has its own GUI and its own safety pausing, so the FSM steps aside while it drives instead of competing with it for `cmd_vel`.
 
-```mermaid
-flowchart LR
-    T[teleop_scan.py: drive and scan] --> M[(saved map: room_map.yaml + .pgm)]
-    M --> P[path_following.py: GUI + pure pursuit]
-    P -->|goal click| A[a_star.py: plan]
-    A -->|waypoints| P
-    P -->|cmd_vel| R((Neato))
-    P -->|path_following_status| F[finite_state_controller.py]
-```
+**Summary of takeaways.** Motion that depends on timing did not survive the simulator's acceleration limits and had to be closed with odometry feedback. When several behaviors share `cmd_vel`, exactly one has to own it at a time. Chaining a separate node into the state machine works as long as the handoff is explicit. The details are in [Learning Objectives and Final Takeaways](#learning-objectives-and-final-takeaways).
+
+![How the self-designed behavior fits together: a person drives and maps, then draws or clicks a route that path_following.py follows, and the FSM watches its status.](docs/figures/pipeline.png)
+
+*Figure 1. The self-designed behavior (Behavior 4). Blue: mapping. Purple: planning and following. The dashed line is the only connection to the state machine.*
 
 ## Individual Behaviors
 
@@ -107,24 +105,30 @@ It was tested offline on a synthetic room with a simulated lidar, and end to end
 
 **Testing.** A* was tested offline as described above. The mapping and path-following nodes were run in Gazebo and recorded: [bags/teleop_scan_demo](bags/teleop_scan_demo) (40 s, includes `/room_map` and `/scan`) and [bags/path_following_demo](bags/path_following_demo) (56 s, includes `/drawn_path`, `/path_following_status` and `/cmd_vel`). No bump events occurred in either recording, so the pause-on-obstacle behavior is not shown in them. Play them back with `ros2 bag play bags/<name> --clock`.
 
+![Mapping run: the occupancy grid with the robot's path, and the keyboard commands over time.](docs/figures/teleop_scan_demo.png)
+
+*Figure 2. `teleop_scan_demo`. Left: the final `/room_map` (dark = occupied, white = free, grey = unknown) with the `/odom` path colored by time. Right: the `/cmd_vel` commands. The keyboard only sends fixed steps, 0 or 0.15 m/s forward and turns of 0.6 rad/s.*
+
+![Path following run: two paths drawn over the map with the robot's actual path, the commands sent, and the node's status over time.](docs/figures/path_following_demo.png)
+
+*Figure 3. `path_following_demo`. Two paths were sent (dashed) and the robot followed both (blue). Right: `/cmd_vel`, with the purple bands marking when `/path_following_status` was `following`, and the status over time below. The map comes from `teleop_scan_demo`; it lines up here because both bags start at the same odometry origin, as the run instructions require.*
+
+What the data shows:
+
+- Both paths finished (`done`). The robot stopped about 0.06 m from the last waypoint of path 1 and about 0.04 m from the last waypoint of path 2, inside the 0.08 m goal tolerance. The status never became `paused`.
+- Around t = 14 to 17 s the robot is at the far end of path 1 (x of about 1.5 m), where the route doubles back. Linear speed falls to about 0.06 m/s and angular speed climbs to its 1.0 rad/s cap. That is the rule that slows the robot as heading error grows and turns it in place past 50 degrees.
+- Path 2 starts (t = 36 s) with a pure turn, linear 0 and angular +1.0 rad/s, before the robot drives off. Computing it from the odometry, the robot faced about -91 degrees while the point 0.3 m ahead on the path was at about -3 degrees, a heading error of about 88 degrees. That is past the 50 degree threshold, so it turned in place until the error dropped below it (about 0.7 s later) and then started driving.
+- The commands are jumpy while following, with brief dips in linear speed. We did not investigate the cause or smooth them, and the robot still completed both paths.
+
 ## Finite State Machine
 
 ### Overall Design
 
-The FSM starts in `DRIVE_SQUARE`, reacts to obstacles and walls, and yields to path following whenever that node is driving.
+**Intended performance.** When the FSM runs, the Neato drives a 1 m square. While it is driving the square, if it bumps something or sees an obstacle less than 0.3 m ahead, it backs away while turning toward the side with more room, then goes back to the square once nothing is in the way. If a wall comes within 0.75 m on either side, it follows that wall until the wall is gone, then returns to the square. If someone starts a path in `path_following.py`, the FSM stops sending velocity commands so that node can drive, and takes over again with the square once the path is finished or cancelled. After the fourth turn of the square the robot stops and waits.
 
-```mermaid
-stateDiagram-v2
-    [*] --> DRIVE_SQUARE
-    DRIVE_SQUARE --> COLLISION_AVOIDANCE: bump or obstacle within 0.3 m
-    COLLISION_AVOIDANCE --> DRIVE_SQUARE: clear
-    DRIVE_SQUARE --> WALL_FOLLOWING: wall within 0.75 m
-    WALL_FOLLOWING --> DRIVE_SQUARE: wall no longer detected
-    DRIVE_SQUARE --> PATH_FOLLOWING: path_following_status is following or paused
-    COLLISION_AVOIDANCE --> PATH_FOLLOWING: path_following_status is following or paused
-    WALL_FOLLOWING --> PATH_FOLLOWING: path_following_status is following or paused
-    PATH_FOLLOWING --> DRIVE_SQUARE: path_following_status is idle or done
-```
+![Finite state machine: DRIVE_SQUARE is the default state; bump or an obstacle leads to COLLISION_AVOIDANCE, a nearby wall leads to WALL_FOLLOWING, and the path node's status leads to PATH_FOLLOWING.](docs/figures/fsm.png)
+
+*Figure 4. The state machine. Solid arrows leave `DRIVE_SQUARE`, dashed arrows return to it. The purple `PATH_FOLLOWING` arrow is checked first on every tick and applies from any state.*
 
 | State | What the robot does |
 |---|---|
@@ -147,18 +151,31 @@ stateDiagram-v2
 - The FSM's `DRIVE_SQUARE` is the timed version, so it inherits the drift described in Behavior 1 (the odometry-based `drive_square.py` is not used inside the FSM), and after the fourth turn it just idles.
 - The standalone behavior nodes (`drive_square`, `collision_avoidance`, `wall_follower`) publish `cmd_vel` themselves and must not run at the same time as the FSM or each other.
 - `follow_side` is only cleared when no wall is visible on either side, so it can stay latched to a wall that has disappeared while the other side still triggers detection. Missing readings contribute zero error, which keeps this from producing a wild command, but the robot may not steer toward the wall that is actually there.
+- Bump and obstacle are only checked while in `DRIVE_SQUARE`. While the robot is in `WALL_FOLLOWING` nothing stops it from driving into something ahead, because that state has no transition to `COLLISION_AVOIDANCE`.
+- The simulator's bump sensor only publishes while something is touching the robot, and `simulator_adapter` only republishes `/bump` when it receives one of those messages, so `/bump` may never report that contact has ended. The FSM's `bumped` flag is only updated when a message arrives, so after a real bump it can stay true and keep the FSM in `COLLISION_AVOIDANCE`. We have not handled this; ignoring a bump reading that has not been refreshed for a fraction of a second would fix it. The same flag is used in `collision_avoidance.py` and `path_following.py`.
 - The FSM has not been run end to end in the simulator, so the handoff to `PATH_FOLLOWING` and the reactive transitions are untested at runtime.
 
 ### Demonstration
 
 TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/finite_state_controller_demo`). The path-following handoff signal itself, `/path_following_status`, is present in [bags/path_following_demo](bags/path_following_demo).
 
+## Team Contributions
+
+**TODO before submitting: the middle column below comes only from the git history (who committed each file), so it shows who wrote the code but not who designed or debugged it. Confirm it and fill in the last column.**
+
+| Person | Files committed (from git history) | Other contributions |
+|---|---|---|
+| Aditi | `drive_square.py`, `collision_avoidance.py`, `finite_state_controller.py`, `a_star.py`, early `wall_follower.py`, `README.md`, `WRITEUP.md` | TODO |
+| Duc | `teleop_scan.py`, `room_map.py`, `path_following.py`, the ICP scaffolding (`icp_localizer.py`, `icp_matching.py`), the `teleop_scan_demo` and `path_following_demo` bags | TODO |
+| Akil | `wall_follower.py` (wall-following and turning logic) | TODO |
+
 ## Learning Objectives and Final Takeaways
 
-**Individual learning objectives.**
+**Individual learning objectives.** TODO: one short paragraph each on what you set out to learn and what you learned (for example, what you now understand about control loops, state machines, mapping or planning that you did not before).
 
 - Aditi: TODO
-- [Teammate]: TODO
+- Duc: TODO
+- Akil: TODO
 
 **Challenges.**
 
@@ -187,8 +204,11 @@ TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/fi
 
 Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `neato2_interfaces`, ...), `numpy`, `pyyaml` and Tkinter.
 
-1. Clone this repo into `~/ros2_ws/src/`, then build and source:
+1. Download the code into a workspace's `src/` folder (skip the first clone if you already have the class's Neato packages), then build and source:
    ```bash
+   cd ~/ros2_ws/src
+   git clone https://github.com/comprobo26/neato_packages.git
+   git clone https://github.com/aditilagisetty/CompRobo-FSM-Project.git
    cd ~/ros2_ws
    colcon build --packages-select ros_behaviors_fsm
    source install/setup.bash
@@ -218,6 +238,13 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
    ros2 bag record /accel /bump /odom /cmd_vel /scan /stable_scan /projected_stable_scan /tf /tf_static -o bags/<name>
    ros2 bag play bags/<name> --clock
    ```
+   Each bag is a folder inside `bags/`. To see one, start RViz (`rviz2`) in another terminal and add displays for `/room_map`, `/drawn_path`, `/scan` or `/tf`.
+6. Rebuild the graphs in this write-up from the bags (needs ROS sourced and matplotlib; the two diagrams come from the `.dot` files with Graphviz's `dot`):
+   ```bash
+   python3 docs/make_figures.py
+   dot -Tpng -Gdpi=200 docs/fsm.dot -o docs/figures/fsm.png
+   dot -Tpng -Gdpi=200 docs/pipeline.dot -o docs/figures/pipeline.png
+   ```
 
 ## Repository Contents
 
@@ -233,6 +260,7 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 | `ros_behaviors_fsm/icp_localizer.py`, `icp_matching.py` | ICP localization against the saved map (tested on synthetic data, not yet on a real map) |
 | `ros_behaviors_fsm/angle_helpers.py` | Quaternion to Euler conversion |
 | `bags/` | Recorded runs (`teleop_scan_demo`, `path_following_demo`) |
+| `docs/` | Diagram sources (`fsm.dot`, `pipeline.dot`), `make_figures.py`, and the figures in `docs/figures/` used in this write-up |
 
 ## Status (delete before submitting)
 
@@ -242,4 +270,7 @@ Still open at the time of writing:
 - [ ] Wall-detection `Marker` (required by the assignment for wall following).
 - [ ] Run the FSM end to end in the simulator, and tune the collision-avoidance and wall-following gains.
 - [ ] Test on the physical Neato.
-- [ ] Add gifs or video for each behavior; fill in the teammate name and individual learning objectives.
+- [ ] Add gifs, video or bag graphs for the drive square, collision avoidance, wall following and FSM (Behaviors 1 to 3 and the FSM have no visual demonstration yet). After recording a bag, add it to `figure_*` functions in `docs/make_figures.py`.
+- [ ] Confirm the Team Contributions table (it is a draft from git history) and fill in each person's other contributions.
+- [ ] Write each person's individual learning objectives.
+- [ ] Confirm the ICP description with whoever is working on it, since it describes the code as it is in the repository now.
