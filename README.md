@@ -39,12 +39,14 @@ once everything below is done.
 - [ ] Wire `wall_follower` into `finite_state_controller.py` as a real state
       (`WALL_FOLLOWING` is currently still a TODO stub there -- everything
       else, including the new `PATH_FOLLOWING` state, is wired up).
-- [ ] Record every bag file in `bags/` (currently empty):
-      `test_drive.bag`, `drive_square_demo.bag`,
-      `collision_avoidance_demo.bag`, `wall_follower_demo.bag`,
-      `path_following_demo.bag`, `finite_state_controller_demo.bag`.
+- [ ] Record the remaining bag files in `bags/`. Done so far:
+      `path_following_demo`, `teleop_scan_demo`. Still to record:
+      `test_drive`, `drive_square_demo`, `collision_avoidance_demo`
+      (needs both a bump-triggered and a lidar-triggered stop),
+      `wall_follower_demo` (also record the wall marker topic),
+      `finite_state_controller_demo`.
       Use `ros2 bag record /accel /bump /odom /cmd_vel /scan /stable_scan
-      /projected_stable_scan /tf /tf_static -o <name>` (see "How To Run").
+      /projected_stable_scan /tf /tf_static -o bags/<name>` (see "How To Run").
 - [ ] Fill in the still-TODO write-up sections below: Behaviors 2-4's
       description/implementation/design-decisions/demo, the FSM's
       implementation details + demonstration + a state-transition diagram,
