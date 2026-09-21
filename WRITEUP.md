@@ -101,7 +101,9 @@ This is our self-designed behavior. It lets a person drive the robot around a ro
 - *Inflating obstacles once, before the search,* keeps the search itself cheap. The alternative, checking the robot's footprint at every visited cell, would repeat the same work many times.
 - *Threading.* `rclpy.spin` runs on a background thread here, because Tkinter's `mainloop` (and, in `teleop_scan.py`, the blocking keyboard loop) need the main thread. This is the reverse of `drive_square.py`, where the work is threaded off and ROS stays on the main thread.
 
-**Localization (in progress).** [icp_localizer.py](ros_behaviors_fsm/icp_localizer.py) and [icp_matching.py](ros_behaviors_fsm/icp_matching.py) are scaffolding for correcting odometry drift by matching the live scan against the saved map. The node and the pose-composition helpers are written, but the three ICP functions (`find_correspondences`, `best_rigid_transform`, `icp_align`) still raise `NotImplementedError`, so the node currently passes odometry through unchanged. Nothing else depends on it.
+**Localization (in progress).** [icp_localizer.py](ros_behaviors_fsm/icp_localizer.py) and [icp_matching.py](ros_behaviors_fsm/icp_matching.py) correct odometry drift by matching the live scan against the saved map. `icp_align` starts from the odometry-based pose and repeats up to 20 times: place the scan on the map, pair each scan point with its nearest occupied map point (dropping pairs over 0.5 m apart), then solve for the shift and rotation that best line the pairs up (a closed-form 2D solution, no SVD). The localizer only moves halfway toward the ICP answer (`gain = 0.5`) and rejects a match if too few points matched, the error is large, or the jump is large. It publishes `localized_pose`, the `map -> odom` transform, and `localization_confident`, a `Bool` that is true when at least 4 of the last 5 scans passed those checks.
+
+It was tested offline on a synthetic room with a simulated lidar, and end to end with the node against a saved map of that room. It recovered the pose to about 1 mm with a 1 cm map and about 3 cm with a 5 cm map (roughly half a map cell), converges from a starting error of up to about 0.4 m and 0.3 rad, and `localization_confident` went false on scans from the wrong place and true again afterwards. It has not been run on a real map from Gazebo or the physical Neato, and the FSM does not use `localization_confident` yet.
 
 **Testing.** A* was tested offline as described above. The mapping and path-following nodes were run in Gazebo and recorded: [bags/teleop_scan_demo](bags/teleop_scan_demo) (40 s, includes `/room_map` and `/scan`) and [bags/path_following_demo](bags/path_following_demo) (56 s, includes `/drawn_path`, `/path_following_status` and `/cmd_vel`). No bump events occurred in either recording, so the pause-on-obstacle behavior is not shown in them. Play them back with `ros2 bag play bags/<name> --clock`.
 
@@ -168,7 +170,7 @@ TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/fi
 **What we would do with more time.**
 
 - Tune the gains in `collision_avoidance.py` and the FSM's wall-following state against real runs, and unify the two wall-following implementations.
-- Implement the ICP functions so the localizer actually corrects odometry, and use the corrected pose in path following.
+- Run the ICP localizer against a real map from Gazebo and the physical Neato, use the corrected pose in path following, and use `localization_confident` as a sensed trigger in the FSM.
 - Make the FSM's `DRIVE_SQUARE` odometry-based, and add a sensed trigger for path following (for example, starting it when a goal is published on a topic).
 - Add the wall-detection `Marker`, and record bags for the drive square, collision avoidance, wall following and the FSM.
 - Test everything on the physical Neato.
@@ -228,7 +230,7 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 | `ros_behaviors_fsm/teleop_scan.py`, `room_map.py` | Keyboard driving and occupancy-grid mapping |
 | `ros_behaviors_fsm/a_star.py` | A* planner with obstacle inflation |
 | `ros_behaviors_fsm/path_following.py` | Path GUI, planning entry points, pure-pursuit follower |
-| `ros_behaviors_fsm/icp_localizer.py`, `icp_matching.py` | Localization scaffolding (ICP math not yet implemented) |
+| `ros_behaviors_fsm/icp_localizer.py`, `icp_matching.py` | ICP localization against the saved map (tested on synthetic data, not yet on a real map) |
 | `ros_behaviors_fsm/angle_helpers.py` | Quaternion to Euler conversion |
 | `bags/` | Recorded runs (`teleop_scan_demo`, `path_following_demo`) |
 

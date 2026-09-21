@@ -60,14 +60,26 @@ def find_correspondences(scan_points, map_points, max_distance):
     (map_points.nearest) and drop pairs you don't trust.
     Return (scan_pts, map_pts), both (K, 2), row i of one matching row i of the other.
     """
-    raise NotImplementedError
+    nearest_points, distance = map_points.nearest(scan_points)
+    trusted = distance < max_distance
+    return scan_points[trusted], nearest_points[trusted]
 
 
 def best_rigid_transform(source, target):
     """(K, 2) point sets with row i of source matching row i of target.
     Return (dx, dy, dyaw) minimizing sum |R(dyaw) @ s_i + (dx, dy) - t_i|^2.
     """
-    raise NotImplementedError
+    source_center = source.mean(axis=0)
+    target_center = target.mean(axis=0)
+    s = source - source_center
+    t = target - target_center
+    dot = (s[:, 0] * t[:, 0] + s[:, 1] * t[:, 1]).sum()
+    cross = (s[:, 0] * t[:, 1] - s[:, 1] * t[:, 0]).sum()
+    dyaw = math.atan2(cross, dot)
+    c, sn = math.cos(dyaw), math.sin(dyaw)
+    dx = target_center[0] - (c * source_center[0] - sn * source_center[1])
+    dy = target_center[1] - (sn * source_center[0] + c * source_center[1])
+    return float(dx), float(dy), dyaw
 
 
 def icp_align(scan_points, map_points, guess, max_iterations=20, max_distance=0.5):
@@ -76,4 +88,22 @@ def icp_align(scan_points, map_points, guess, max_iterations=20, max_distance=0.
     of scan points that ended up with a trusted match, and the rms distance of those
     matches in meters. Return None if it cannot produce an estimate.
     """
-    raise NotImplementedError
+    if len(scan_points) < 3 or len(map_points) == 0:
+        return None
+    pose = tuple(guess)
+    for _ in range(max_iterations):
+        in_map = transform_points(scan_points, pose)
+        source, target = find_correspondences(in_map, map_points, max_distance)
+        if len(source) < 3:
+            return None
+        step = best_rigid_transform(source, target)
+        pose = compose(step, pose)
+        if abs(step[0]) < 1e-4 and abs(step[1]) < 1e-4 and abs(step[2]) < 1e-4:
+            break
+    in_map = transform_points(scan_points, pose)
+    source, target = find_correspondences(in_map, map_points, max_distance)
+    if len(source) < 3:
+        return None
+    inlier_fraction = len(source) / len(scan_points)
+    rms = float(np.sqrt(((source - target) ** 2).sum(axis=1).mean()))
+    return pose, inlier_fraction, rms

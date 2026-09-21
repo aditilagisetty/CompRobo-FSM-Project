@@ -9,6 +9,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker
 
@@ -48,6 +49,8 @@ class ICPLocalizer(Node):
         self.declare_parameter('max_turn', 0.5)
         self.declare_parameter('gain', 0.5)
         self.declare_parameter('max_spin', 0.4)
+        self.declare_parameter('confidence_window', 5)
+        self.declare_parameter('confidence_matches', 4)
         self.map_file = self.get_parameter('map_file').value
         self.lidar_offset_x = self.get_parameter('lidar_offset_x').value
         self.min_inliers = self.get_parameter('min_inliers').value
@@ -56,6 +59,8 @@ class ICPLocalizer(Node):
         self.max_turn = self.get_parameter('max_turn').value
         self.gain = self.get_parameter('gain').value
         self.max_spin = self.get_parameter('max_spin').value
+        self.confidence_window = self.get_parameter('confidence_window').value
+        self.confidence_matches = self.get_parameter('confidence_matches').value
 
         self.saved_map = SavedMap.load(self.map_file)
         self.map_points = MapPoints(self.saved_map)
@@ -68,10 +73,13 @@ class ICPLocalizer(Node):
         self.icp_ready = True
         self.scans_matched = 0
         self.scans_rejected = 0
+        self.recent_matches = deque(maxlen=self.confidence_window)
+        self.confident = False
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.pose_pub = self.create_publisher(PoseStamped, 'localized_pose', 10)
         self.scan_pub = self.create_publisher(Marker, 'scan_in_map', 10)
+        self.confidence_pub = self.create_publisher(Bool, 'localization_confident', 10)
         self.map_pub = self.create_publisher(OccupancyGrid, 'saved_map', latched)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_subscription(Odometry, 'odom', self.process_odom, 10)
@@ -106,9 +114,20 @@ class ICPLocalizer(Node):
                 self.get_logger().warn('icp_align is not implemented yet, passing odometry through')
                 self.icp_ready = False
             result = None
+        matched_before = self.scans_matched
         estimate = self.fuse(predicted, result)
         self.correction = compose(estimate, inverse(odom_at_scan))
         self.publish_scan_in_map(points, estimate)
+        self.publish_confidence(self.scans_matched > matched_before)
+
+    def publish_confidence(self, scan_matched):
+        """Confident once enough of the last few scans passed fuses checks,
+        so a single bad scan doesn't flip answer
+        """
+        self.recent_matches.append(scan_matched)
+        self.confident = (len(self.recent_matches) == self.confidence_window
+                          and sum(self.recent_matches) >= self.confidence_matches)
+        self.confidence_pub.publish(Bool(data=self.confident))
 
     def fuse(self, predicted, result):
         if result is None:
@@ -186,7 +205,8 @@ class ICPLocalizer(Node):
             f'localized=({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f}deg) '
             f'correction=({self.correction[0]:.2f}, {self.correction[1]:.2f}, '
             f'{math.degrees(self.correction[2]):.0f}deg) '
-            f'matched={self.scans_matched} rejected={self.scans_rejected}')
+            f'matched={self.scans_matched} rejected={self.scans_rejected} '
+            f'confident={self.confident}')
 
 
 def main(args=None):
