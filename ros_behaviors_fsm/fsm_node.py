@@ -42,6 +42,21 @@ class FSMNode(Node):
 
         self.has_teleop_run = False  # Flag to check if teleop has run before
 
+        # wall_follower turns away on its own once something is within
+        # wall_follower_turn_distance -- that keeps front_distance hovering
+        # just above obstacle_distance instead of ever crossing it, so
+        # OBSTACLE AVOIDANCE was never reached even while stuck turning in
+        # place at a corner. Back the absolute-distance switch up with a
+        # timeout: if front_distance has stayed inside wall_follower's own
+        # reactive zone for too long without fully clearing, hand off to
+        # collision_avoidance anyway.
+        self.obstacle_distance = 0.5
+        self.wall_follow_recover_distance = 0.7
+        self.wall_follower_turn_distance = 1.0
+        self.wall_follower_clear_distance = 1.3
+        self.stuck_timeout_sec = 3.0
+        self.close_since = None
+
         # Starting separate thread for keyboard input
         self.key_thread = threading.Thread(target=self.keyboard_listener)
         self.key_thread.daemon = True
@@ -113,14 +128,29 @@ class FSMNode(Node):
         # print the current state for debugging purpose
         print(self.state)
 
-        if (
-            front_distance < 0.5 and self.state == "WALL FOLLOW"
-        ):  # If an obstacle is detected within 0.5 meters
-            self.set_state("OBSTACLE AVOIDANCE")
-        elif (
-            front_distance > 0.7 and self.state == "OBSTACLE AVOIDANCE"
-        ):  # leeway to prevent rapid switching
-            self.set_state("WALL FOLLOW")
+        # tracked independent of state, so a brief dip into OBSTACLE AVOIDANCE
+        # and back doesn't reset the clock on a corner we're still stuck at
+        now = self.get_clock().now().nanoseconds / 1e9
+        if front_distance < self.wall_follower_turn_distance:
+            if self.close_since is None:
+                self.close_since = now
+        elif front_distance > self.wall_follower_clear_distance:
+            self.close_since = None
+        stuck = (
+            self.close_since is not None
+            and now - self.close_since > self.stuck_timeout_sec
+        )
+
+        if self.state == "WALL FOLLOW":
+            if front_distance < self.obstacle_distance or stuck:
+                self.set_state("OBSTACLE AVOIDANCE")
+        elif self.state == "OBSTACLE AVOIDANCE":
+            # stay in OBSTACLE AVOIDANCE while still stuck even if a nudge
+            # from the potential field briefly pushed front back out past
+            # wall_follow_recover_distance -- otherwise wall_follower just
+            # pulls it straight back into the same corner
+            if front_distance > self.wall_follow_recover_distance and not stuck:
+                self.set_state("WALL FOLLOW")
 
 
 def main(args=None):
