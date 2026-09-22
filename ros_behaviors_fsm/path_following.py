@@ -3,6 +3,8 @@ import queue
 import sys
 import time
 import tkinter as tk
+from collections import deque
+from datetime import datetime
 from threading import Lock, Thread
 from queue import Queue
 
@@ -91,7 +93,14 @@ class PathFollower(Node):
         self.idx = 0
         self.state = "idle"
 
+        self.current_mode = "WALL FOLLOW"  # fsm_node's own startup default
+        self.mode_history = deque(maxlen=200)
+
         self.create_subscription(String, "current_mode", self.mode_callback, 10)
+        # lets the control panel switch fsm_node's mode without a separate
+        # `ros2 topic pub` -- a long-lived publisher in the same process
+        # avoids the discovery-race that can drop a short-lived `pub -1`
+        self.fsm_command_pub = self.create_publisher(String, "fsm_command", 10)
 
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_path_following", 10)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -110,10 +119,15 @@ class PathFollower(Node):
         self.create_timer(0.1, self.publish_status)
 
     def mode_callback(self, msg):
-        if msg.data == "PATH FOLLOWING":
-            self.ui_queue.put("SHOW_UI")
-        else:
-            self.ui_queue.put("HIDE_UI")
+        self.current_mode = msg.data
+        self.mode_history.append((datetime.now().strftime("%H:%M:%S"), msg.data))
+        self.ui_queue.put("SHOW_UI" if msg.data == "PATH FOLLOWING" else "HIDE_UI")
+
+    def send_fsm_command(self, key):
+        """Same t/m/g/p switches fsm_node's own keyboard listener sends,
+        published from this long-lived node instead of a one-shot CLI pub.
+        """
+        self.fsm_command_pub.publish(String(data=key))
 
     def process_odom(self, msg):
         self.x = msg.pose.pose.position.x
@@ -262,7 +276,7 @@ class PathPainter:
     MAX_HEIGHT = 700
     REFRESH_MS = 100
 
-    def __init__(self, node):
+    def __init__(self, node, master):
         self.node = node
         self.map = None
         self.strokes = []
@@ -270,7 +284,11 @@ class PathPainter:
         self.bad_points = []
         self.goal_click = None
 
-        self.root = tk.Tk()
+        # a Toplevel under the control panel's persistent root, not its own
+        # Tk() -- so it can be shown/hidden as fsm_node's mode changes
+        # instead of being fully created and destroyed each time, which let
+        # this window coexist with the always-visible control panel
+        self.root = tk.Toplevel(master)
         self.root.title("Neato path painter")
         bar = tk.Frame(self.root)
         bar.pack(side=tk.TOP, fill=tk.X)
@@ -303,6 +321,7 @@ class PathPainter:
 
         self.reload_map()
         self.root.after(self.REFRESH_MS, self.tick)
+        self.root.withdraw()  # hidden until fsm_node actually enters PATH FOLLOWING
 
     def reload_map(self):
         try:
@@ -567,13 +586,105 @@ class PathPainter:
             # Handle cases where the window was closed manually via window manager [X]
             return False
 
+    def show(self):
+        self.root.deiconify()
+
+    def hide(self):
+        self.root.withdraw()
+
     def close(self):
+        """The window's own [X] button: cancel the path and tell fsm_node
+        to leave PATH FOLLOWING, same as switching modes any other way.
+        """
         self.node.cancel()
+        self.node.send_fsm_command("g")
+        self.hide()
+
+
+class ControlPanel:
+    """Always-visible window: buttons to switch fsm_node's mode (the same
+    t/m/g/p switches its own keyboard listener and /fsm_command accept), a
+    live current_mode line, and a scrolling log of past mode changes. Owns
+    the one persistent Tk root for this process; the path-drawing window
+    (PathPainter) is a Toplevel under it that this panel shows and hides as
+    current_mode changes, rather than creating and destroying it each time.
+
+    This exists because fsm_node's own keyboard control only works when it
+    has a real terminal (not true under ros2 launch), and the path-drawing
+    window itself only exists once already in PATH FOLLOWING -- so neither
+    one can be where you switch *into* that mode. This panel can, because
+    it's up the whole time regardless of mode.
+    """
+
+    REFRESH_MS = 200
+    MODES = (
+        ("Teleop Scan", "t"),
+        ("Drive Square", "m"),
+        ("Wall Follow", "g"),
+        ("Path Following", "p"),
+    )
+
+    def __init__(self, node, ui_queue):
+        self.node = node
+        self.ui_queue = ui_queue
+
+        self.root = tk.Tk()
+        self.root.title("Neato FSM control panel")
+
+        bar = tk.Frame(self.root)
+        bar.pack(side=tk.TOP, fill=tk.X, padx=4, pady=4)
+        for label, key in self.MODES:
+            tk.Button(bar, text=label, width=14,
+                     command=lambda k=key: self.node.send_fsm_command(k)
+                     ).pack(side=tk.LEFT, padx=2)
+
+        self.status = tk.Label(self.root, text="mode: (waiting for fsm_node)",
+                               anchor="w", font=("TkDefaultFont", 11, "bold"))
+        self.status.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(4, 0))
+        tk.Label(self.root, text="Drive Square only takes effect while in Teleop "
+                 "Scan; Path Following opens the drawing window below.",
+                 anchor="w", fg="#555555").pack(side=tk.TOP, fill=tk.X, padx=6)
+
+        tk.Label(self.root, text="Mode history:", anchor="w").pack(
+            side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
+        log_frame = tk.Frame(self.root)
+        log_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        scrollbar = tk.Scrollbar(log_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log = tk.Listbox(log_frame, height=8, width=48, yscrollcommand=scrollbar.set)
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.log.yview)
+
+        self.painter = PathPainter(node, master=self.root)
+        self.logged_through = 0
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(self.REFRESH_MS, self.tick)
+
+    def tick(self):
+        self.status.config(text=f"mode: {self.node.current_mode}")
+
+        history = self.node.mode_history
+        for stamp, mode in list(history)[self.logged_through:]:
+            self.log.insert(tk.END, f"{stamp}  {mode}")
+            self.log.see(tk.END)
+        self.logged_through = len(history)
+
         try:
-            self.root.quit()
-            self.root.destroy()
-        except Exception:
+            cmd = self.ui_queue.get_nowait()
+            if cmd == "SHOW_UI":
+                self.painter.show()
+            elif cmd == "HIDE_UI":
+                self.painter.hide()
+        except queue.Empty:
             pass
+
+        self.root.after(self.REFRESH_MS, self.tick)
+
+    def on_close(self):
+        self.node.cancel()
+        self.node.send_fsm_command("g")
+        self.root.quit()
 
     def run(self):
         self.root.mainloop()
@@ -601,37 +712,12 @@ def main(args=None):
     spin_thread = Thread(target=rclpy.spin, args=(node,))
     spin_thread.start()
 
-    painter = None
-
+    panel = ControlPanel(node, ui_queue)
     try:
-        while rclpy.ok():
-            try:
-
-                cmd = ui_queue.get(timeout=0.2)
-
-                if cmd == "SHOW_UI" and painter is None:
-                    node.get_logger().info(
-                        "Path following mode active. Launching UI..."
-                    )
-                    painter = PathPainter(node)
-                    painter.run()
-                    painter = None
-
-                elif cmd == "HIDE_UI" and painter is not None:
-                    node.get_logger().info(
-                        "Path following mode inactive. Closing UI..."
-                    )
-                    painter.close()
-                    painter = None
-
-            except queue.Empty:
-                pass
-
+        panel.run()
     except KeyboardInterrupt:
         pass
     finally:
-        if painter is not None:
-            painter.close()
         node.cancel()
         rclpy.shutdown()
         spin_thread.join()
