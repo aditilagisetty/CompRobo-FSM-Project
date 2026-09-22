@@ -2,7 +2,8 @@ import math
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point, Twist
+from visualization_msgs.msg import Marker
 
 
 class WallFollower(Node):
@@ -11,11 +12,12 @@ class WallFollower(Node):
         super().__init__("wall_follower")
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_wall_follower", 10)
+        # as an arrow in RViz, the same way collision_avoidance.py
+        # visualizes its net force on collision_avoidance_force.
+        self.marker_pub = self.create_publisher(Marker, "wall_detection_marker", 10)
         self.forward_speed = 0.1
         self.distance_from_wall = 1.0
-        self.kp = (
-            0.5  # TODO: tune this proportional gain to get good wall-following behavior
-        )
+        self.kp = 0.5
         self.follow_side = (
             1  # +1 for left wall, -1 for right wall, None for no wall detected
         )
@@ -102,7 +104,25 @@ class WallFollower(Node):
         print(f"Side: {'LEFT' if self.follow_side == 1 else 'RIGHT'}")
         print(f"Angular Z: {vel.angular.z}")
 
+        self.publish_wall_marker(decided_angles[1], 90 * self.follow_side)
         self.vel_pub.publish(vel)
+
+    def publish_wall_marker(self, distance, angle_deg):
+        """Visualizes the detected wall point as an arrow from the robot's origin"""
+        angle_rad = math.radians(angle_deg)
+        x = distance * math.cos(angle_rad)
+        y = distance * math.sin(angle_rad)
+        marker = Marker()
+        marker.header.frame_id = "base_link"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.type = Marker.ARROW
+        marker.action = Marker.ADD
+        marker.scale.x = 0.05  # shaft diameter
+        marker.scale.y = 0.1  # head diameter
+        marker.color.a = 1.0
+        marker.color.b = 1.0
+        marker.points = [Point(x=0.0, y=0.0, z=0.0), Point(x=x, y=y, z=0.0)]
+        self.marker_pub.publish(marker)
 
 
 def main(args=None):

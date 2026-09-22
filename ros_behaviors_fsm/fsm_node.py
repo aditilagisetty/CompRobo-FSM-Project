@@ -3,9 +3,11 @@ import select
 import sys
 import termios
 import threading
+import time
 import tty
 import rclpy
 from geometry_msgs.msg import Twist
+from neato2_interfaces.msg import Bump
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -40,6 +42,19 @@ class FSMNode(Node):
         # Subscrption for LaserScan data
         self.create_subscription(LaserScan, "scan", self.run_loop, 10)
 
+        # Same t/m/g/p switches as the keyboard listener below, but over a
+        # topic instead of raw stdin -- this works under ros2 launch (or any
+        # other non-interactive process), where stdin isn't a real terminal
+        # and the keyboard listener can't run at all, e.g.:
+        #   ros2 topic pub -1 /fsm_command std_msgs/String "data: p"
+        self.create_subscription(String, "fsm_command", self.process_fsm_command, 10)
+
+        # bump subscription
+        self.create_subscription(Bump, "bump", self.process_bump, 10)
+        self.bumped = False
+        self.bump_timeout_sec = 0.3
+        self.last_bump_time = None
+
         self.has_teleop_run = False  # Flag to check if teleop has run before
 
         # wall_follower turns away on its own once something is within
@@ -62,6 +77,20 @@ class FSMNode(Node):
         self.key_thread.daemon = True
         self.key_thread.start()
 
+    def process_bump(self, msg):
+        """sets self.bumped True on any real bump message.
+        Clearing it is check_bump_timeout()'s job instead.
+        """
+        if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
+            self.last_bump_time = time.monotonic()
+            self.bumped = True
+
+    def check_bump_timeout(self):
+        """Clears self.bumped once bump_timeout_sec has passed.
+        """
+        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+            self.bumped = False
+
     def set_state(self, new_state):
         """
         Sets the current state of the FSM and publishes it to the "current_mode" topic.
@@ -69,12 +98,34 @@ class FSMNode(Node):
         self.state = new_state
         self.mode_pub.publish(String(data=new_state))
 
+    def handle_key(self, key):
+        """The t/m/g/p switch logic, shared by the keyboard listener and
+        process_fsm_command so the two input paths can't drift apart.
+        """
+        key = key.lower()
+        if key == "t":
+            self.set_state("TELEOP SCAN")
+        elif key == "m" and self.state == "TELEOP SCAN":
+            self.set_state("DRIVE SQUARE")
+        elif key == "g":
+            self.set_state("WALL FOLLOW")
+        elif key == "p" and self.has_teleop_run:
+            self.set_state("PATH FOLLOWING")
+
+    def process_fsm_command(self, msg):
+        """Same switches as keyboard_listener, delivered over the
+        fsm_command topic instead of raw stdin -- this is the one that
+        still works under ros2 launch.
+        """
+        self.handle_key(msg.data.strip())
+
     def keyboard_listener(self):
         """Listens for raw key presses in terminal without pressing Enter."""
         if not sys.stdin.isatty():
             self.get_logger().error(
-                "fsm_node keyboard control needs a real terminal "
-                "(stdin is not a tty)"
+                "fsm_node keyboard control needs a real terminal (stdin is "
+                "not a tty) -- publish to /fsm_command instead, e.g. "
+                "ros2 topic pub -1 /fsm_command std_msgs/String \"data: p\""
             )
             return
         settings = termios.tcgetattr(sys.stdin)
@@ -82,16 +133,7 @@ class FSMNode(Node):
             tty.setcbreak(sys.stdin.fileno())
             while rclpy.ok():
                 if select.select([sys.stdin], [], [], 0.1)[0]:
-                    key = sys.stdin.read(1)
-                    if key.lower() == "t":
-                        self.set_state("TELEOP SCAN")
-                    elif key.lower() == "m" and self.state == "TELEOP SCAN":
-                        self.set_state("DRIVE SQUARE")
-                    elif key.lower() == "g":
-                        self.set_state("WALL FOLLOW")
-                    elif key.lower() == "p" and self.has_teleop_run:
-                        self.set_state("PATH FOLLOWING")
-
+                    self.handle_key(sys.stdin.read(1))
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
@@ -126,6 +168,9 @@ class FSMNode(Node):
         if self.state == "TELEOP SCAN":
             return  # Skip processing if in TELEOP SCAN mode
 
+        
+        self.check_bump_timeout()
+
         # Check for obstacles in front of the robot
         front_cone = msg.ranges[:10] + msg.ranges[-10:]
         valid_ranges = [r for r in front_cone if math.isfinite(r) and r > 0.0]
@@ -148,14 +193,13 @@ class FSMNode(Node):
         )
 
         if self.state == "WALL FOLLOW":
-            if front_distance < self.obstacle_distance or stuck:
+            if front_distance < self.obstacle_distance or stuck or self.bumped:
                 self.set_state("OBSTACLE AVOIDANCE")
         elif self.state == "OBSTACLE AVOIDANCE":
-            # stay in OBSTACLE AVOIDANCE while still stuck even if a nudge
-            # from the potential field briefly pushed front back out past
-            # wall_follow_recover_distance -- otherwise wall_follower just
-            # pulls it straight back into the same corner
-            if front_distance > self.wall_follow_recover_distance and not stuck:
+            # stay in OBSTACLE AVOIDANCE while still stuck or bumped even if
+            # a nudge from the potential field briefly pushed front back out
+            if (front_distance > self.wall_follow_recover_distance
+                    and not stuck and not self.bumped):
                 self.set_state("WALL FOLLOW")
 
 

@@ -5,71 +5,6 @@ This node encapsulates implements a simple time-based approach to driving the
 robot in a square.  The system makes use of a a special ``estop`` topic that
 can trigger the robot to automatically stop when the value is true is received
 on that topic.
-
-Day 4 annotation (multi-threaded sample):
-
-- run_loop runs once, start to finish, on its own Thread -- it isn't called
-  repeatedly like a timer callback. It blocks on sleep() between segments,
-  but that blocking happens on its own thread, so it never blocks the
-  handle_estop/process_scan callbacks, which run on rclpy.spin()'s thread.
-- FSM: two states, "driving forward" and "turning left", alternated for 4
-  iterations. Transitions are time-based (fixed sleep durations), same as
-  Sample 1, just executed sequentially in a dedicated thread instead of a
-  timer callback.
-- When e-stop triggers, handle_estop/process_scan immediately publish a zero
-  Twist, so the robot stops quickly even if run_loop's thread is mid-sleep.
-- It WILL stop after the fourth side (assuming no e-stop): the `for _ in
-  range(4)` loop simply exits and the thread ends after 4 forward+turn
-  pairs, unlike Sample 1's original (unfixed) behavior.
-- As originally written, resuming was NOT handled correctly: handle_estop
-  only ever called e_stop.set() when msg.data was True, with no `else:
-  e_stop.clear()`, so once tripped the square-drawing was stopped for good.
-  Fixed below by tracking the manual estop topic and the obstacle-proximity
-  condition as two separate flags (self.manual_estop, self.obstacle_close)
-  that combine in self.stopped() -- each can be independently set and
-  cleared as new messages arrive, so the robot can resume once both clear.
-  One caveat: an interruption still can't resume a segment exactly where it
-  left off -- turn_left/drive_forward each restart from scratch (a fresh
-  start_yaw/start_x/start_y) the next time they're called, so an interrupted
-  segment's partial progress toward its target is lost, even though the stop
-  check itself is now continuous (see below), not just between segments.
-
-Day 4 "going beyond" fix -- turning/driving by odometry instead of time:
-  turn_left/drive_forward originally assumed a fixed angular/linear speed
-  and slept for the fixed duration that speed implies. In Gazebo this
-  undershoots: the sim's diff-drive plugin has a max_wheel_acceleration of
-  1.0 rad/s^2 (see neato2_gazebo/models/neato/neato_with_camera.sdf), so it
-  takes about a second to ramp up to the commanded speed, and that ramp time
-  isn't accounted for by the fixed sleep -- so the robot doesn't actually
-  finish the turn/distance by the time the sleep ends, and the drawn shape
-  drifts further from a square with every side. Both methods now instead
-  poll actual odometry (position for drive_forward, yaw for turn_left) and
-  stop once the real measured motion reaches the target, checking self.stopped()
-  every poll so e-stop is now caught mid-segment too, not just between segments.
-
-  That alone still overshoots, though: the same acceleration limit that
-  slows ramp-up also limits deceleration, so commanding a hard stop the
-  instant the target is reached doesn't actually stop the robot instantly --
-  it coasts for as long as it takes the wheels to decelerate. At the
-  original angular_vel=0.3, that's roughly a 1-second coast (~8-9 degrees of
-  extra turn); at linear_vel=0.1 it's worse (wheel speed is higher, so the
-  coast is longer -- on the order of several cm per side). Fixed by
-  switching from bang-bang control (full speed until a hard cutoff) to
-  proportional control: command a speed proportional to the remaining
-  angle/distance, capped at a max and floored at a min, so the robot is
-  already moving slowly (low momentum) by the time it's close enough to
-  stop, rather than braking hard from full speed.
-
-  Proportional control shrinks the coast-to-stop distance but doesn't
-  eliminate it -- there's still some residual velocity right up until the
-  loop breaks. If turn_left starts commanding rotation immediately after
-  drive_forward returns, the robot can still be physically coasting forward
-  a little, so the "turn" is actually a forward-arcing motion rather than an
-  in-place pivot (and likewise for residual rotation bleeding into the next
-  drive_forward). Fixed with settle(): an explicit zero-velocity command
-  followed by a fixed wait (1s, comfortably longer than the ~0.6s worst-case
-  coast time at these speeds) after each motion, so the robot is fully at
-  rest before the next one starts.
 """
 
 import math
@@ -81,7 +16,7 @@ from time import sleep
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 from .angle_helpers import euler_from_quaternion
 
@@ -102,8 +37,17 @@ class DrawSquare(Node):
         self.create_subscription(Bool, "estop", self.handle_estop, 10)
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
         self.create_subscription(Odometry, "odom", self.process_odom, 10)
+        self.create_subscription(String, "current_mode", self.process_current_mode, 10)
+        self._last_mode = None
         self.run_loop_thread = Thread(target=self.run_loop)
         self.run_loop_thread.start()
+
+    def process_current_mode(self, msg):
+        entered_drive_square = msg.data == "DRIVE SQUARE" and self._last_mode != "DRIVE SQUARE"
+        self._last_mode = msg.data
+        if entered_drive_square and not self.run_loop_thread.is_alive():
+            self.run_loop_thread = Thread(target=self.run_loop)
+            self.run_loop_thread.start()
 
     def stopped(self):
         """Whether the robot should currently be halted, from either the
