@@ -25,7 +25,12 @@ class CollisionAvoidance(Node):
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_collision_avoidance", 10)
         self.marker_pub = self.create_publisher(Marker, "collision_avoidance_force", 10)
 
-        self.stop_distance = 0.3  # hard-stop trigger in meters
+        self.stop_distance = 0.3  # hard-stop trigger in meters, straight ahead
+        # the potential field only ever pushes the robot forward, so an obstacle
+        # off to the side can end up this close before the field steers away from
+        # it -- back that up with a tighter hard-stop over a wider cone
+        self.side_stop_distance = 0.22
+        self.side_cone_deg = 45
         self.bumped = False
         self.too_close = False
 
@@ -79,7 +84,9 @@ class CollisionAvoidance(Node):
     # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
-        self.too_close = self.front_range < self.stop_distance
+        self.side_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=self.side_cone_deg)
+        self.too_close = (self.front_range < self.stop_distance
+                          or self.side_range < self.side_stop_distance)
 
         if self.bumped or self.too_close:
             # Hard-stop safety backstop bc something is already too close
@@ -106,9 +113,6 @@ class CollisionAvoidance(Node):
         slowdown = 1.0 / (1.0 + repulsion_magnitude)
         vel.linear.x = self.forward_speed * slowdown if net_x > 0 else 0.0
         self.vel_pub.publish(vel)
-
-        # Debug Print Statement
-        print(f"forward speed: {vel.linear.x:.2f}, angular speed: {vel.angular.z:.2f}")
 
         self.publish_force_marker(net_x, net_y)
 
