@@ -92,22 +92,31 @@ class CollisionAvoidance(Node):
             self.bumped = True
 
     def check_bump_timeout(self):
-        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+        if (
+            self.bumped
+            and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
+        ):
             self.bumped = False
 
     # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
         self.check_bump_timeout()
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
-        self.side_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=self.side_cone_deg)
+        self.side_range = self._min_range_in_cone(
+            msg, center_deg=0, half_width_deg=self.side_cone_deg
+        )
         # once too_close is set, it takes the larger *_clear
         # distance to release it, not just re-crossing the trigger distance
         if self.too_close:
-            self.too_close = (self.front_range < self.stop_distance_clear
-                              or self.side_range < self.side_stop_distance_clear)
+            self.too_close = (
+                self.front_range < self.stop_distance_clear
+                or self.side_range < self.side_stop_distance_clear
+            )
         else:
-            self.too_close = (self.front_range < self.stop_distance
-                              or self.side_range < self.side_stop_distance)
+            self.too_close = (
+                self.front_range < self.stop_distance
+                or self.side_range < self.side_stop_distance
+            )
 
         if self.bumped or self.too_close:
             # Hard-stop safety backstop bc something is already too close

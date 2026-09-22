@@ -86,9 +86,11 @@ class FSMNode(Node):
             self.bumped = True
 
     def check_bump_timeout(self):
-        """Clears self.bumped once bump_timeout_sec has passed.
-        """
-        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+        """Clears self.bumped once bump_timeout_sec has passed."""
+        if (
+            self.bumped
+            and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
+        ):
             self.bumped = False
 
     def set_state(self, new_state):
@@ -125,7 +127,7 @@ class FSMNode(Node):
             self.get_logger().error(
                 "fsm_node keyboard control needs a real terminal (stdin is "
                 "not a tty) -- publish to /fsm_command instead, e.g. "
-                "ros2 topic pub -1 /fsm_command std_msgs/String \"data: p\""
+                'ros2 topic pub -1 /fsm_command std_msgs/String "data: p"'
             )
             return
         settings = termios.tcgetattr(sys.stdin)
@@ -138,37 +140,43 @@ class FSMNode(Node):
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
     def wall_follower(self, msg):
-        """Publishes velocity commands from the wall follower node if the FSM is in the "WALL FOLLOW" state."""
+        """Publishes velocity commands from the wall follower
+        node if the FSM is in the "WALL FOLLOW" state."""
         if self.state == "WALL FOLLOW":
             self.vel_pub.publish(msg)
 
     def drive_square(self, msg):
-        """Publishes velocity commands from the drive square node if the FSM is in the "DRIVE SQUARE" state."""
+        """Publishes velocity commands from the drive square node
+        if the FSM is in the "DRIVE SQUARE" state."""
         if self.state == "DRIVE SQUARE":
             self.vel_pub.publish(msg)
 
     def obstacle_avoidance(self, msg):
-        """Publishes velocity commands from the obstacle avoidance node if the FSM is in the "OBSTACLE AVOIDANCE" state."""
+        """Publishes velocity commands from the obstacle avoidance node
+        if the FSM is in the "OBSTACLE AVOIDANCE" state."""
         if self.state == "OBSTACLE AVOIDANCE":
             self.vel_pub.publish(msg)
 
     def path_following(self, msg):
-        """Publishes velocity commands from the path following node if the FSM is in the "PATH FOLLOWING" state."""
+        """Publishes velocity commands from the path following node if
+        the FSM is in the "PATH FOLLOWING" state."""
         if self.state == "PATH FOLLOWING":
             self.vel_pub.publish(msg)
 
     def teleop_scan(self, msg):
-        """Publishes velocity commands from the teleop scan node if the FSM is in the "TELEOP SCAN" state."""
+        """Publishes velocity commands from the teleop scan
+        node if the FSM is in the "TELEOP SCAN" state."""
         if self.state == "TELEOP SCAN":
             self.vel_pub.publish(msg)
             self.has_teleop_run = True  # Set the flag to True when teleop_scan is run
 
     def run_loop(self, msg):
-        """Main loop that checks the LaserScan data to determine if the robot should switch between "WALL FOLLOW" and "OBSTACLE AVOIDANCE" states."""
+        """Main loop that checks the LaserScan data to determine
+        if the robot should switch between "WALL FOLLOW" and "OBSTACLE AVOIDANCE" states.
+        """
         if self.state == "TELEOP SCAN":
             return  # Skip processing if in TELEOP SCAN mode
 
-        
         self.check_bump_timeout()
 
         # Check for obstacles in front of the robot
@@ -198,12 +206,16 @@ class FSMNode(Node):
         elif self.state == "OBSTACLE AVOIDANCE":
             # stay in OBSTACLE AVOIDANCE while still stuck or bumped even if
             # a nudge from the potential field briefly pushed front back out
-            if (front_distance > self.wall_follow_recover_distance
-                    and not stuck and not self.bumped):
+            if (
+                front_distance > self.wall_follow_recover_distance
+                and not stuck
+                and not self.bumped
+            ):
                 self.set_state("WALL FOLLOW")
 
 
 def main(args=None):
+    """Main function to initialize the ROS2 node and start spinning."""
     rclpy.init(args=args)
     fsm_node = FSMNode()
     rclpy.spin(fsm_node)

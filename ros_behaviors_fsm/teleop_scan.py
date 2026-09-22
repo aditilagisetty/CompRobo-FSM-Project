@@ -25,7 +25,12 @@ HELP = """
 
 
 class TeleopScan(Node):
-    """Node that implements a simple teleoperation interface for controlling the robot using keyboard input. The robot can be driven forward, backward, and turned left or right. The robot's movements are also recorded to create a map of the environment using laser scan data."""
+    """Node that implements a simple teleoperation interface
+    for controlling the robot using keyboard input.
+    The robot can be driven forward, backward, and turned left or right.
+    The robot's movements are also recorded to create
+    a map of the environment using laser scan data.
+    """
 
     KEY_BINDINGS = {
         "w": (1.0, 0.0),
@@ -72,7 +77,10 @@ class TeleopScan(Node):
         self.create_timer(5.0, self.report_status)
 
     def process_odom(self, msg):
-        """Processes the incoming Odometry message to update the robot's position and orientation. The odometry data is used to track the robot's movement and build a map of the environment."""
+        """Processes the incoming Odometry message to update the robot's position
+        and orientation. The odometry data is used to track the
+        robot's movement and build a map of the environment.
+        """
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
@@ -83,7 +91,10 @@ class TeleopScan(Node):
         self.have_odom = True
 
     def pose_at(self, stamp):
-        """Returns the robot's pose (x, y, yaw) at the given timestamp by interpolating between the two closest odometry readings. If the requested timestamp is outside the range of recorded odometry data, None is returned."""
+        """Returns the robot's pose (x, y, yaw) at the given
+        timestamp by interpolating between the two closestodometry readings.
+        If the requested timestamp is outside the range of recorded odometry data, None is returned.
+        """
         history = list(self.odom_history)
         if len(history) < 2 or stamp < history[0][0]:
             return None
@@ -96,7 +107,9 @@ class TeleopScan(Node):
                 return x0 + f * (x1 - x0), y0 + f * (y1 - y0), a0 + f * da
 
     def process_scan(self, msg):
-        """Processes the incoming LaserScan message to update the robot's map of the environment. The laser scan data is used to detect obstacles and walls, which are then added to the occupancy grid map."""
+        """Processes the incoming LaserScan message to update the
+        robot's map of the environment. The laser scan data is used to detect obstacles and walls,
+          which are then added to the occupancy grid map."""
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         pose = self.pose_at(stamp)
         # a fast spin smears the map, odom yaw is too rough for it
@@ -115,7 +128,10 @@ class TeleopScan(Node):
         self.scans_used += 1
 
     def handle_key(self, key):
-        """Handles keyboard input to control the robot's movement and behavior. The robot can be driven forward, backward, and turned left or right using the WASD keys. Additional commands allow for speed adjustments, stopping the robot, saving the map, and switching between different states of operation."""
+        """Handles keyboard input to control the robot's movement and behavior.
+        The robot can be driven forward, backward, and turned left or right using the WASD keys.
+        Additional commands allow for speed adjustments, stopping the robot,
+        saving the map, and switching between different states of operation."""
         key = key.lower()
         if key in self.KEY_BINDINGS:
             lin, ang = self.KEY_BINDINGS[key]
@@ -132,7 +148,8 @@ class TeleopScan(Node):
             self.save_map()
 
     def scale_speeds(self, factor):
-        """Scales the robot's linear and angular speeds by the given factor. This allows for dynamic adjustment of the robot's speed during operation."""
+        """Scales the robot's linear and angular speeds by the given factor.
+        This allows for dynamic adjustment of the robot's speed during operation."""
         self.linear_speed *= factor
         self.angular_speed *= factor
         self.linear_cmd *= factor
@@ -142,11 +159,15 @@ class TeleopScan(Node):
         )
 
     def publish_velocity(self):
-        """Publishes the current linear and angular velocity commands to the robot. This method is called periodically to ensure that the robot continues to move according to the latest commands received from keyboard input."""
+        """Publishes the current linear and angular velocity commands to the robot.
+        This method is called periodically to ensure that the robot
+        continues to move according to the latest commands received from keyboard input.
+        """
         self.drive(self.linear_cmd, self.angular_cmd)
 
     def drive(self, linear, angular):
-        """Publishes a Twist message with the given linear and angular velocities to the robot's velocity command topic."""
+        """Publishes a Twist message with the given linear and angular velocities
+        to the robot's velocity command topic."""
         msg = Twist()
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)
@@ -159,7 +180,9 @@ class TeleopScan(Node):
         self.drive(0.0, 0.0)
 
     def publish_map(self):
-        """Publishes the current occupancy grid map to the "room_map" topic. This method is called periodically to provide an updated view of the environment based on the latest laser scan data."""
+        """Publishes the current occupancy grid map to the "room_map" topic.
+        This method is called periodically to provide an updated view of the
+        environment based on the latest laser scan data."""
         msg = OccupancyGrid()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "odom"
@@ -173,12 +196,17 @@ class TeleopScan(Node):
         self.map_pub.publish(msg)
 
     def save_map(self):
-        """Saves the current occupancy grid map to a file. The map is saved in a format that can be loaded later for further analysis or use in navigation tasks."""
+        """Saves the current occupancy grid map to a file.
+        The map is saved in a format that can be loaded later
+        for further analysis or use in navigation tasks."""
         path = self.room_map.save(self.map_file)
         self.get_logger().info(f"saved map to {path}")
 
     def report_status(self):
-        """Reports the current status of the robot, including its position, orientation, and the number of laser scans used to build the map. This method is called periodically to provide feedback on the robot's operation."""
+        """Reports the current status of the robot, including its position,
+         orientation, and the number of laser scans used to build the map.
+        This method is called periodically to provide feedback on the robot's operation.
+        """
         self.get_logger().info(
             f"pose=({self.x:.2f}, {self.y:.2f}, {math.degrees(self.yaw):.0f}deg) "
             f"scans mapped={self.scans_used}"
@@ -186,7 +214,10 @@ class TeleopScan(Node):
 
 
 def keyboard_loop(node):
-    """Runs a loop that listens for keyboard input and passes it to the given TeleopScan node for processing. The loop runs in a separate thread to allow for non-blocking operation of the robot while still responding to user input."""
+    """Runs a loop that listens for keyboard input and passes it to the given
+    TeleopScan node for processing.
+    The loop runs in a separate thread to allow for non-blocking operation
+    of the robot while still responding to user input."""
     fd = sys.stdin.fileno()
     settings = termios.tcgetattr(fd)
     try:
@@ -200,6 +231,10 @@ def keyboard_loop(node):
 
 
 def main(args=None):
+    """
+    Main function to initialize the ROS2 node and start spinning it.
+    This function sets up the TeleopScan node and keeps it running until the program is terminated.
+    It also handles keyboard input for controlling the robot and saving the map."""
     # let Ctrl-C raise here so the robot still gets a zero velocity before rclpy shuts down
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = TeleopScan()

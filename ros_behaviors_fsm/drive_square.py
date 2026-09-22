@@ -43,7 +43,9 @@ class DrawSquare(Node):
         self.run_loop_thread.start()
 
     def process_current_mode(self, msg):
-        entered_drive_square = msg.data == "DRIVE SQUARE" and self._last_mode != "DRIVE SQUARE"
+        entered_drive_square = (
+            msg.data == "DRIVE SQUARE" and self._last_mode != "DRIVE SQUARE"
+        )
         self._last_mode = msg.data
         if entered_drive_square and not self.run_loop_thread.is_alive():
             self.run_loop_thread = Thread(target=self.run_loop)
