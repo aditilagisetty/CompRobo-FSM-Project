@@ -8,6 +8,7 @@ a list of (x, y) waypoints, which get fed through the same
 resample_path/smooth_path used for hand-drawn paths, then
 into PathFollower.follow(waypoints)
 """
+
 import heapq
 import math
 
@@ -37,7 +38,9 @@ def inflate_obstacles(image, radius_cells):
             src_c0, src_c1 = max(0, -d_col), width - max(0, d_col)
             dst_r0, dst_r1 = max(0, d_row), height - max(0, -d_row)
             dst_c0, dst_c1 = max(0, d_col), width - max(0, -d_col)
-            shifted[dst_r0:dst_r1, dst_c0:dst_c1] = occupied[src_r0:src_r1, src_c0:src_c1]
+            shifted[dst_r0:dst_r1, dst_c0:dst_c1] = occupied[
+                src_r0:src_r1, src_c0:src_c1
+            ]
             inflated |= shifted
     return inflated
 

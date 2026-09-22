@@ -138,7 +138,10 @@ class PathFollower(Node):
             self.bumped = True
 
     def check_bump_timeout(self):
-        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+        if (
+            self.bumped
+            and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
+        ):
             self.bumped = False
 
     def handle_estop(self, msg):
@@ -249,6 +252,12 @@ class PathFollower(Node):
 
 
 class PathPainter:
+    """
+    GUI for drawing a path on a map and sending it to the PathFollower node.
+    The user can draw strokes on the map, set a goal point, and plan a path using A* algorithm.
+    The GUI also allows the user to clear the strokes, undo the last stroke, and reload the map.
+    """
+
     MAX_WIDTH = 1000
     MAX_HEIGHT = 700
     REFRESH_MS = 100

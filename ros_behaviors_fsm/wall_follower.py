@@ -7,6 +7,10 @@ from visualization_msgs.msg import Marker
 
 
 class WallFollower(Node):
+    """
+    Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision.
+    """
+
     def __init__(self):
         """Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision."""
         super().__init__("wall_follower")
@@ -126,6 +130,7 @@ class WallFollower(Node):
 
 
 def main(args=None):
+    """Main function to initialize the ROS2 node and start spinning it. This function sets up the WallFollower node and keeps it running until the program is terminated."""
     rclpy.init(args=args)
     node = WallFollower()
     rclpy.spin(node)

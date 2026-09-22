@@ -47,8 +47,11 @@ class MapPoints:
         return len(self.points)
 
     def nearest(self, points):
-        d2 = ((points ** 2).sum(1)[:, None] + (self.points ** 2).sum(1)[None, :]
-              - 2.0 * points @ self.points.T)
+        d2 = (
+            (points**2).sum(1)[:, None]
+            + (self.points**2).sum(1)[None, :]
+            - 2.0 * points @ self.points.T
+        )
         index = d2.argmin(axis=1)
         distance = np.sqrt(np.maximum(d2[np.arange(len(points)), index], 0.0))
         return self.points[index], distance
