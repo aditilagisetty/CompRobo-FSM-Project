@@ -1,4 +1,5 @@
 import math
+import time
 from enum import Enum, auto
 
 import rclpy
@@ -32,6 +33,8 @@ class FiniteStateController(Node):
         self.wall_detect_distance = 0.75  # wall-following trigger, in meters
 
         self.bumped = False
+        self.bump_timeout_sec = 0.3
+        self.last_bump_time = None
         self.front_range = float("inf")
         self.obstacle_detected = False
         self.wall_detected = False
@@ -65,11 +68,14 @@ class FiniteStateController(Node):
         self.square_turns_executed = 0
         self.square_segment_start = None
 
-    # REMOVE LATER
     def process_bump(self, msg):
-        self.bumped = bool(
-            msg.left_front or msg.left_side or msg.right_front or msg.right_side
-        )
+        if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
+            self.last_bump_time = time.monotonic()
+            self.bumped = True
+
+    def check_bump_timeout(self):
+        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+            self.bumped = False
 
     def process_path_following_status(self, msg):
         self.path_following_active = msg.data in ("following", "paused")
@@ -129,6 +135,7 @@ class FiniteStateController(Node):
             self.wall_rear_dist = self._range_at_angle(msg, 135 * self.follow_side)
 
     def run_loop(self):
+        self.check_bump_timeout()
         previous_state = self.state
 
         if self.path_following_active:

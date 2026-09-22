@@ -1,6 +1,7 @@
 import math
 import queue
 import sys
+import time
 import tkinter as tk
 from threading import Lock, Thread
 from queue import Queue
@@ -81,6 +82,8 @@ class PathFollower(Node):
         self.have_odom = False
         self.manual_estop = False
         self.bumped = False
+        self.bump_timeout_sec = 0.3
+        self.last_bump_time = None
         self.obstacle_close = False
 
         self.lock = Lock()
@@ -128,9 +131,13 @@ class PathFollower(Node):
         self.obstacle_close = bool(len(r) and r.min() < self.stop_distance)
 
     def process_bump(self, msg):
-        self.bumped = bool(
-            msg.left_front or msg.left_side or msg.right_front or msg.right_side
-        )
+        if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
+            self.last_bump_time = time.monotonic()
+            self.bumped = True
+
+    def check_bump_timeout(self):
+        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+            self.bumped = False
 
     def handle_estop(self, msg):
         self.manual_estop = bool(msg.data)
@@ -188,6 +195,7 @@ class PathFollower(Node):
         self.status_pub.publish(String(data=state))
 
     def control_loop(self):
+        self.check_bump_timeout()
         with self.lock:
             if self.state not in ("following", "paused") or not self.have_odom:
                 return

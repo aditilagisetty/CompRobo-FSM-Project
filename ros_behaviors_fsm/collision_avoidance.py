@@ -8,6 +8,7 @@ Combines what used to be two separate behaviors:
 """
 
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -35,6 +36,8 @@ class CollisionAvoidance(Node):
         self.side_stop_distance_clear = 0.32
         self.bumped = False
         self.too_close = False
+        self.bump_timeout_sec = 0.3
+        self.last_bump_time = None
 
         self.forward_speed = 0.1
         self.influence_radius = 1.0  # meters -- obstacles farther than this are ignored
@@ -84,12 +87,17 @@ class CollisionAvoidance(Node):
         return min(readings)
 
     def process_bump(self, msg):
-        self.bumped = bool(
-            msg.left_front or msg.left_side or msg.right_front or msg.right_side
-        )
+        if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
+            self.last_bump_time = time.monotonic()
+            self.bumped = True
+
+    def check_bump_timeout(self):
+        if self.bumped and time.monotonic() - self.last_bump_time > self.bump_timeout_sec:
+            self.bumped = False
 
     # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
+        self.check_bump_timeout()
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.side_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=self.side_cone_deg)
         # once too_close is set, it takes the larger *_clear
