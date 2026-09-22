@@ -1,8 +1,10 @@
 import math
+import queue
 import sys
 import time
 import tkinter as tk
 from threading import Lock, Thread
+from queue import Queue
 
 import numpy as np
 import rclpy
@@ -52,7 +54,7 @@ def smooth_path(points, passes=2):
 
 
 class PathFollower(Node):
-    def __init__(self):
+    def __init__(self, ui_queue: Queue):
         super().__init__("path_following")
         self.declare_parameter("map_file", DEFAULT_MAP_FILE)
         self.declare_parameter("linear_speed", 0.15)
@@ -72,6 +74,7 @@ class PathFollower(Node):
         self.stop_distance = self.get_parameter("stop_distance").value
         self.waypoint_spacing = self.get_parameter("waypoint_spacing").value
         self.robot_radius = self.get_parameter("robot_radius").value
+        self.ui_queue = ui_queue
 
         self.x = 0.0
         self.y = 0.0
@@ -88,6 +91,8 @@ class PathFollower(Node):
         self.idx = 0
         self.state = "idle"
 
+        self.create_subscription(String, "current_mode", self.mode_callback, 10)
+
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_path_following", 10)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.path_pub = self.create_publisher(Path, "drawn_path", path_qos)
@@ -101,6 +106,12 @@ class PathFollower(Node):
         self.create_subscription(Bool, "estop", self.handle_estop, 10)
         self.create_timer(0.05, self.control_loop)
         self.create_timer(0.1, self.publish_status)
+
+    def mode_callback(self, msg):
+        if msg.data == "PATH FOLLOWING":
+            self.ui_queue.put("SHOW_UI")
+        else:
+            self.ui_queue.put("HIDE_UI")
 
     def process_odom(self, msg):
         self.x = msg.pose.pose.position.x
@@ -537,7 +548,11 @@ class PathPainter:
 
     def close(self):
         self.node.cancel()
-        self.root.destroy()
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except Exception:
+            pass
 
     def run(self):
         self.root.mainloop()
@@ -546,7 +561,9 @@ class PathPainter:
 def main(args=None):
     # let Ctrl-C raise here so the robot still gets a zero velocity before rclpy shuts down
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    node = PathFollower()
+
+    ui_queue = queue.Queue()
+    node = PathFollower(ui_queue)
     # the robot must start where it did during teleop_scan, or the map and odom won't line up
     try:
         SavedMap.load(node.map_file)
@@ -559,13 +576,41 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
         sys.exit(1)
+
     spin_thread = Thread(target=rclpy.spin, args=(node,))
     spin_thread.start()
+
+    painter = None
+
     try:
-        PathPainter(node).run()
+        while rclpy.ok():
+            try:
+
+                cmd = ui_queue.get(timeout=0.2)
+
+                if cmd == "SHOW_UI" and painter is None:
+                    node.get_logger().info(
+                        "Path following mode active. Launching UI..."
+                    )
+                    painter = PathPainter(node)
+                    painter.run()
+                    painter = None
+
+                elif cmd == "HIDE_UI" and painter is not None:
+                    node.get_logger().info(
+                        "Path following mode inactive. Closing UI..."
+                    )
+                    painter.close()
+                    painter = None
+
+            except queue.Empty:
+                pass
+
     except KeyboardInterrupt:
         pass
     finally:
+        if painter is not None:
+            painter.close()
         node.cancel()
         rclpy.shutdown()
         spin_thread.join()
