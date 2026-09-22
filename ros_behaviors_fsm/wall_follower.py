@@ -24,12 +24,22 @@ class WallFollower(Node):
         self.turn_speed = 0.4  # rad/s
         self.turn_duration = (math.pi / 2.0) / self.turn_speed
 
+        self.has_teleop_run = False  # Flag to check if teleop has run before
+
     def process_scan(self, msg):
 
         # Initial values declared
         vel = Twist()
         now = self.get_clock().now().nanoseconds / 1e9
         front_dist = msg.ranges[0]
+
+        if math.isfinite(front_dist) and 0.0 < front_dist <= 1.0:
+            self.is_turning = True
+            self.turn_start_time = now
+            vel.linear.x = 0.0
+            vel.angular.z = float(-1.0 * self.follow_side * self.turn_speed)
+            self.vel_pub.publish(vel)
+            return
 
         r45 = msg.ranges[45]
         r90 = msg.ranges[90]
@@ -60,14 +70,6 @@ class WallFollower(Node):
             decided_angles = [r45, r90, r135]
         else:
             decided_angles = [r225, r270, r315]
-
-        if math.isfinite(front_dist) and 0.0 < front_dist <= 1.0:
-            self.is_turning = True
-            self.turn_start_time = now
-            vel.linear.x = 0.0
-            vel.angular.z = float(-1.0 * self.follow_side * self.turn_speed)
-            self.vel_pub.publish(vel)
-            return
 
         if any(
             math.isinf(r) or math.isnan(r)
