@@ -1,0 +1,40 @@
+// Gateway architecture of fsm_node.py (the second, in-progress FSM).
+// Render: dot -Tpng -Gdpi=200 fsm_node.dot -o figures/fsm_node.png
+digraph FSMNode {
+    graph [rankdir=LR, fontname="DejaVu Sans", bgcolor="white", pad=0.35,
+           nodesep=0.5, ranksep=0.85, splines=spline];
+    node  [fontname="DejaVu Sans", fontsize=12, shape=box, style="rounded,filled",
+           penwidth=1.6, margin="0.2,0.14"];
+    edge  [fontname="DejaVu Sans", fontsize=10, color="#4B5563", fontcolor="#1F2937",
+           penwidth=1.4, arrowsize=0.85];
+
+    wf    [label="wall_follower.py",       fillcolor="#DCFCE7", color="#16A34A", fontcolor="#14532D"];
+    ca    [label="collision_avoidance.py", fillcolor="#FEE2E2", color="#DC2626", fontcolor="#7F1D1D"];
+    ts    [label="teleop_scan.py",         fillcolor="#DBEAFE", color="#2563EB", fontcolor="#1E3A8A"];
+    kb    [label="keyboard\n't' / 'a'", shape=oval, fillcolor="#FEF3C7", color="#D97706"];
+
+    subgraph cluster_gw {
+        label="fsm_node.py -- publishes cmd_vel, subscribes to the rest"; labeljust=l;
+        fontsize=11; fontcolor="#6B7280"; style="rounded,dashed"; color="#9CA3AF"; margin=18;
+        state [label="self.state\n'WALL FOLLOW' | 'OBSTACLE AVOIDANCE' | 'TELEOP SCAN'",
+               shape=box, style="rounded,filled", fillcolor="#F3F4F6", color="#6B7280", fontcolor="#1F2937"];
+        mux   [label="forward whichever\ncmd_vel_* matches\nself.state", fillcolor="#EDE9FE", color="#7C3AED", fontcolor="#4C1D95"];
+    }
+
+    robot [label="Neato", shape=oval, fillcolor="#F3F4F6", color="#6B7280"];
+    scan  [label="/scan", shape=oval, fillcolor="#F3F4F6", color="#6B7280"];
+
+    wf -> mux [label="cmd_vel_wall_follower"];
+    ca -> mux [label="cmd_vel_collision_avoidance\n(fixed 2026-09-22 -- was\nmis-wired to a different\ntopic name, so this path\nnever forwarded anything)", color="#DC2626", fontcolor="#7F1D1D"];
+    ts -> mux [label="cmd_vel_teleop_scan"];
+    mux -> robot [label="cmd_vel"];
+
+    scan -> state [label="front reading:\n<0.5m enters OBSTACLE AVOIDANCE\n>0.7m returns to WALL FOLLOW"];
+    kb -> state [style=dashed, color="#D97706", fontcolor="#92400E",
+                 label="crashes if stdin isn't a real\nterminal (e.g. under ros2 launch) --\nswitch then doesn't work"];
+    state -> mux [style=dashed];
+
+    note [shape=note, style=filled, fillcolor="#FEF3C7", color="#D97706", fontcolor="#92400E", fontsize=10,
+          label="fsm.launch.py does not run yet:\nnot installed to share/, and names\nthree packages that do not exist\n(all three nodes above are really\nin one package, ros_behaviors_fsm)"];
+    { rank=same; note; robot; }
+}

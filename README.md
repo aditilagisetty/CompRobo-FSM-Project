@@ -38,7 +38,7 @@ Other nodes: `finite_state_controller` (moves the robot directly), `teleop_scan`
 |---|---|
 | `ros_behaviors_fsm/` | The ROS nodes and their helpers |
 | `bags/` | Recorded runs: `teleop_scan_demo`, `path_following_demo` |
-| `docs/` | Diagram sources, `make_figures.py`, and the figures used in the write-up |
+| `docs/` | Diagram sources (`fsm.dot`, `pipeline.dot`, `fsm_node.dot`), `make_figures.py`, `plot_potential_field_fix.py`, and the figures used in the write-up |
 | `WRITEUP.md` | The write-up |
 
 ## Still to do

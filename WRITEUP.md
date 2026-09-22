@@ -75,6 +75,10 @@ Key design choices, each explained in the sections below:
 **Two more bugs found and fixed live in Gazebo, 2026-09-22.** A teammate reported obstacle avoidance "just rams into the object" (the topic-mismatch fix in `fsm_node.py`, above, addressed that one) and separately asked whether it steers around obstacles or just stops. Testing that directly, facing the robot at an obstacle dead-on and letting it run:
 
 1. *A symmetric obstacle produced a maxed-out, flip-flopping turn with no forward motion.* An obstacle straight ahead is the same distance on both sides of center, so the un-rotated repulsion summed to a vector pointing almost exactly backward. `atan2(net_y, net_x)` then sits on the +/-pi discontinuity, where floating-point noise flips the sign every scan -- confirmed live: `angular.z` alternated between the +1.0 and -1.0 rad/s clamp while `linear.x` stayed 0, and the robot's true position (checked directly against the simulator, not `/odom`) did not move for 10 straight seconds. Fixed by rotating every repulsive contribution in `compute_potential_field` by a fixed 20-degree bias (`self.repulsion_bias_angle`), so a symmetric obstacle no longer produces a force sitting exactly on that discontinuity -- verified offline first (the same symmetric input now gives a consistent heading every time, across several distances, with no change to the open-space or single-sided-obstacle cases), then live (the robot turned one direction and stayed turning, instead of alternating).
+
+   ![Left: an obstacle straight ahead produces a net force at exactly 180 degrees. Right: rotating every repulsion vector by 20 degrees moves the net force well off that point.](docs/figures/potential_field_fix.png)
+
+   The exact mechanism, computed with the real `compute_potential_field` (not illustrative numbers): a symmetric obstacle's repulsion sums to a heading of exactly +180.0 degrees before the fix, and -137.0 degrees after.
 2. *Even with that fixed, the robot could still get stuck at a distance right at the hard-stop threshold.* Steering moved it just far enough to clear the threshold, the very next scan put it right back under it, and `cmd_vel` ended up alternating between a real command and an exact `(0, 0)` on almost every single message. With the wheels' real acceleration limit (see Behavior 1), each between-stops command was too short-lived to ever build actual speed, so the robot again did not move, confirmed the same way. Fixed with hysteresis: `stop_distance_clear` (0.4 m) and `side_stop_distance_clear` (0.32 m) are now required to *release* a hard stop, wider than the 0.3 m/0.22 m that *trigger* one. Re-verified live in the same scenario: the robot moved a real 0.4 m away and its distance to the obstacle grew from 0.4 m to just over 1.0 m in 15 s, instead of staying flat.
 
 One design limit remains, not yet tested: the hard stop still has no recovery motion once it does hold (bump, or something within the tighter thresholds even after hysteresis) -- it just stops and waits for the obstacle to move or clear on its own.
@@ -182,6 +186,10 @@ TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/fi
 ### A second, in-progress FSM: `fsm_node.py`
 
 While writing this section, a teammate committed a second, different state-machine design: [fsm_node.py](ros_behaviors_fsm/fsm_node.py) and [fsm.launch.py](ros_behaviors_fsm/fsm.launch.py), added in commits `f02ca4e` ("Made progress on the fsm but only halfway there") and `ae49987`. It is registered in `setup.py` alongside `finite_state_controller.py`, as a separate `fsm_node` executable; the two have not been reconciled into one FSM, and it is not yet decided which one this project submits.
+
+![fsm_node.py's gateway architecture: wall_follower.py, collision_avoidance.py and teleop_scan.py each publish to their own cmd_vel_* topic, fsm_node.py forwards whichever one matches its current state to cmd_vel, and /scan plus the keyboard drive that state.](docs/figures/fsm_node.png)
+
+*Figure 5. `fsm_node.py`'s gateway design, contrasted with Figure 4's single-node design. The red label marks the topic-name mismatch fixed on 2026-09-22 (What We Verified); the amber notes mark the two problems still open (the launch file, and the keyboard listener under a non-interactive stdin).*
 
 **The design is different: a topic-mux gateway instead of one node with sensor callbacks.** `wall_follower.py` and `collision_avoidance.py` each publish `Twist` on their own topic (`cmd_vel_wall_follower`, `cmd_vel_collision_avoidance`) instead of `cmd_vel`. `fsm_node.py` subscribes to those, plus a `cmd_vel_teleop_scan` and the raw `scan`, and republishes whichever one matches its current state (a plain string: `"WALL FOLLOW"`, `"OBSTACLE AVOIDANCE"`, or `"TELEOP SCAN"`) to `cmd_vel`. The state itself switches on the closest reading in a +/-10 ray cone (`OBSTACLE AVOIDANCE` under 0.5 m, back to `WALL FOLLOW` over 0.7 m), or manually by pressing `t` or `a` on the keyboard. This explains the topic renames in `wall_follower.py` and `collision_avoidance.py` described under Behaviors 2 and 3 -- they were made to feed this gateway, not a mistake on their own -- but the gateway itself is not finished, and running the standalone nodes without it (as the current "How To Run" section describes) no longer works, as described in Behaviors 2 and 3 and in What We Verified.
 
@@ -311,11 +319,13 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
    ros2 bag play bags/<name> --clock
    ```
    Each bag is a folder inside `bags/`. To see one, start RViz (`rviz2`) in another terminal and add displays for `/room_map`, `/drawn_path`, `/scan` or `/tf`.
-6. Rebuild the graphs in this write-up from the bags (needs ROS sourced and matplotlib; the two diagrams come from the `.dot` files with Graphviz's `dot`):
+6. Rebuild the graphs in this write-up (needs ROS sourced; matplotlib for the bag-based and potential-field figures, Graphviz's `dot` for the three diagrams):
    ```bash
    python3 docs/make_figures.py
+   python3 docs/plot_potential_field_fix.py
    dot -Tpng -Gdpi=200 docs/fsm.dot -o docs/figures/fsm.png
    dot -Tpng -Gdpi=200 docs/pipeline.dot -o docs/figures/pipeline.png
+   dot -Tpng -Gdpi=200 docs/fsm_node.dot -o docs/figures/fsm_node.png
    ```
 
 ## Repository Contents
@@ -333,7 +343,7 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 | `ros_behaviors_fsm/icp_localizer.py`, `icp_matching.py` | ICP localization against the saved map (tested on synthetic data, not yet on a real map) |
 | `ros_behaviors_fsm/angle_helpers.py` | Quaternion to Euler conversion |
 | `bags/` | Recorded runs (`teleop_scan_demo`, `path_following_demo`) |
-| `docs/` | Diagram sources (`fsm.dot`, `pipeline.dot`), `make_figures.py`, and the figures in `docs/figures/` used in this write-up |
+| `docs/` | Diagram sources (`fsm.dot`, `pipeline.dot`, `fsm_node.dot`), `make_figures.py` (bag-based figures), `plot_potential_field_fix.py`, and the figures in `docs/figures/` used in this write-up |
 
 ## Status (delete before submitting)
 
