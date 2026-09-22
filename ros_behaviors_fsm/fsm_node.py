@@ -71,6 +71,12 @@ class FSMNode(Node):
 
     def keyboard_listener(self):
         """Listens for raw key presses in terminal without pressing Enter."""
+        if not sys.stdin.isatty():
+            self.get_logger().error(
+                "fsm_node keyboard control needs a real terminal "
+                "(stdin is not a tty)"
+            )
+            return
         settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setcbreak(sys.stdin.fileno())

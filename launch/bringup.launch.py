@@ -40,6 +40,10 @@ def generate_launch_description():
     world_arg = DeclareLaunchArgument(
         'world', default_value='gauntlet',
         description='Which neato2_gazebo world to launch: ' + ', '.join(WORLD_FILES))
+    with_keyboard_nodes_arg = DeclareLaunchArgument(
+        'with_keyboard_nodes', default_value='true',
+        description='Forwarded to fsm.launch.py: also launch fsm_node and '
+                    'teleop_scan (set to false to skip them)')
 
     gazebo_share = get_package_share_directory('neato2_gazebo')
     fsm_share = get_package_share_directory('ros_behaviors_fsm')
@@ -63,10 +67,14 @@ def generate_launch_description():
 
     fsm_app = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(fsm_share, 'launch', 'fsm.launch.py')))
+            os.path.join(fsm_share, 'launch', 'fsm.launch.py')),
+        launch_arguments={
+            'with_keyboard_nodes': LaunchConfiguration('with_keyboard_nodes'),
+        }.items())
 
     return LaunchDescription([
         world_arg,
+        with_keyboard_nodes_arg,
         OpaqueFunction(function=include_world),
         fsm_app,
     ])
