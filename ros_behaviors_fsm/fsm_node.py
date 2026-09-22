@@ -25,6 +25,10 @@ class FSMNode(Node):
         )
         self.create_subscription(Twist, "cmd_vel_teleop_scan", self.teleop_scan, 10)
 
+        self.create_subscription(
+            Twist, "cmd_vel_path_following", self.path_following, 10
+        )
+
         # Subscrption for LaserScan data
         self.create_subscription(LaserScan, "scan", self.run_loop, 10)
 
@@ -46,9 +50,12 @@ class FSMNode(Node):
                     if key.lower() == "t":
                         self.state = "TELEOP SCAN"
                         self.get_logger().info("Switched state to: TELEOP SCAN")
-                    elif key.lower() == "a":
+                    elif key.lower() == "g":
                         self.state = "WALL FOLLOW"
                         self.get_logger().info("Switched state to: AUTONOMOUS")
+                    elif key.lower() == "p" and self.has_teleop_run:
+                        self.state = "PATH FOLLOWING"
+                        self.get_logger().info("Switched state to: PATH FOLLOWING")
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
@@ -58,6 +65,10 @@ class FSMNode(Node):
 
     def obstacle_avoidance(self, msg):
         if self.state == "OBSTACLE AVOIDANCE":
+            self.vel_pub.publish(msg)
+
+    def path_following(self, msg):
+        if self.state == "PATH FOLLOWING":
             self.vel_pub.publish(msg)
 
     def teleop_scan(self, msg):
@@ -84,10 +95,6 @@ class FSMNode(Node):
         elif (
             front_distance > 0.7 and self.state == "OBSTACLE AVOIDANCE"
         ):  # leeway to prevent rapid switching
-            self.state = "WALL FOLLOW"
-        elif (
-            self.state == "TELEOP SCAN" and not self.has_teleop_run
-        ):  # If in TELEOP SCAN mode but teleop_scan hasn't run yet
             self.state = "WALL FOLLOW"
 
 
