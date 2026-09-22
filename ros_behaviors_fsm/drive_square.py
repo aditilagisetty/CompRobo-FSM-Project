@@ -71,6 +71,7 @@ Day 4 "going beyond" fix -- turning/driving by odometry instead of time:
   coast time at these speeds) after each motion, so the robot is fully at
   rest before the next one starts.
 """
+
 import math
 
 import rclpy
@@ -84,12 +85,12 @@ from std_msgs.msg import Bool
 
 from .angle_helpers import euler_from_quaternion
 
+
 class DrawSquare(Node):
-    """A class that implements a node to pilot a robot in a square.
-    """
+    """A class that implements a node to pilot a robot in a square."""
 
     def __init__(self):
-        super().__init__('draw_square_with_estop')
+        super().__init__("draw_square_with_estop")
         self.manual_estop = False
         self.obstacle_close = False
         self.stop_distance = 0.5
@@ -97,10 +98,10 @@ class DrawSquare(Node):
         self.current_y = 0.0
         self.current_yaw = 0.0
         # create a thread to handle long-running component
-        self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.create_subscription(Bool, 'estop', self.handle_estop, 10)
-        self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
-        self.create_subscription(Odometry, 'odom', self.process_odom, 10)
+        self.vel_pub = self.create_publisher(Twist, "cmd_vel_drive_square", 10)
+        self.create_subscription(Bool, "estop", self.handle_estop, 10)
+        self.create_subscription(LaserScan, "scan", self.process_scan, 10)
+        self.create_subscription(Odometry, "odom", self.process_odom, 10)
         self.run_loop_thread = Thread(target=self.run_loop)
         self.run_loop_thread.start()
 
@@ -119,7 +120,8 @@ class DrawSquare(Node):
             msg.pose.pose.orientation.x,
             msg.pose.pose.orientation.y,
             msg.pose.pose.orientation.z,
-            msg.pose.pose.orientation.w)
+            msg.pose.pose.orientation.w,
+        )
 
     @staticmethod
     def _yaw_turned(current_yaw, start_yaw):
@@ -167,7 +169,7 @@ class DrawSquare(Node):
             if not self.stopped():
                 print("turning left")
                 self.turn_left()
-        print('done with run loop')
+        print("done with run loop")
 
     def drive(self, linear, angular):
         """Drive with the specified linear and angular velocity.
@@ -198,9 +200,9 @@ class DrawSquare(Node):
         approaches the target instead of coasting past it under momentum
         after a hard stop command.
         """
-        max_angular_vel = 0.2   # lowered from 0.3 to shrink the coast-to-stop distance
+        max_angular_vel = 0.2  # lowered from 0.3 to shrink the coast-to-stop distance
         min_angular_vel = 0.05  # floor so the final approach doesn't stall
-        tolerance = 0.02        # ~1 degree; close enough to call it done
+        tolerance = 0.02  # ~1 degree; close enough to call it done
         k_p = 1.0
         target_angle = math.pi / 2
 
@@ -222,8 +224,10 @@ class DrawSquare(Node):
         else:
             self.drive(linear=0.0, angular=0.0)
         actual_deg = math.degrees(self._yaw_turned(self.current_yaw, start_yaw))
-        print(f"turn_left done: target=90.0deg actual={actual_deg:.1f}deg "
-              f"error={actual_deg - 90.0:+.1f}deg stopped_early={stopped_early}")
+        print(
+            f"turn_left done: target=90.0deg actual={actual_deg:.1f}deg "
+            f"error={actual_deg - 90.0:+.1f}deg stopped_early={stopped_early}"
+        )
 
     def drive_forward(self, distance):
         """Drive straight until odometry reports we've covered the given
@@ -235,9 +239,9 @@ class DrawSquare(Node):
             distance (_type_): the distance to drive forward.  Only positive
             values are supported.
         """
-        max_linear_vel = 0.1    # same top speed as before
-        min_linear_vel = 0.02   # floor so the final approach doesn't stall
-        tolerance = 0.02        # meters; close enough to call it done
+        max_linear_vel = 0.1  # same top speed as before
+        min_linear_vel = 0.02  # floor so the final approach doesn't stall
+        tolerance = 0.02  # meters; close enough to call it done
         # Lower than turn_left's k_p: this sim's linear deceleration is
         # weaker relative to the top speed than its angular deceleration is,
         # so k_p=1.0 here only starts slowing down in the last 10cm -- not
@@ -266,8 +270,11 @@ class DrawSquare(Node):
         else:
             self.drive(linear=0.0, angular=0.0)
         actual_traveled = math.hypot(self.current_x - start_x, self.current_y - start_y)
-        print(f"drive_forward done: target={distance:.2f}m actual={actual_traveled:.2f}m "
-              f"error={actual_traveled - distance:+.2f}m stopped_early={stopped_early}")
+        print(
+            f"drive_forward done: target={distance:.2f}m actual={actual_traveled:.2f}m "
+            f"error={actual_traveled - distance:+.2f}m stopped_early={stopped_early}"
+        )
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -276,5 +283,6 @@ def main(args=None):
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

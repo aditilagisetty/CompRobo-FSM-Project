@@ -7,6 +7,7 @@ from geometry_msgs.msg import Twist
 
 class WallFollower(Node):
     def __init__(self):
+        """Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision."""
         super().__init__("wall_follower")
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_wall_follower", 10)
@@ -27,7 +28,9 @@ class WallFollower(Node):
         self.has_teleop_run = False  # Flag to check if teleop has run before
 
     def process_scan(self, msg):
-
+        """
+        Processes the incoming LaserScan message to determine the robot's behavior.
+        """
         # Initial values declared
         vel = Twist()
         now = self.get_clock().now().nanoseconds / 1e9
