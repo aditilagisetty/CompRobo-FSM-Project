@@ -17,7 +17,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Empty, String
 
 from .a_star import plan_world_path
 from .angle_helpers import euler_from_quaternion
@@ -101,6 +101,11 @@ class PathFollower(Node):
         # `ros2 topic pub` -- a long-lived publisher in the same process
         # avoids the discovery-race that can drop a short-lived `pub -1`
         self.fsm_command_pub = self.create_publisher(String, "fsm_command", 10)
+        # lets the control panel's arrow keys drive teleop_scan.py -- Tk
+        # reads keys from the display's keyboard focus, not this process's
+        # stdin, so this works even when nothing here has a real terminal
+        self.teleop_vel_pub = self.create_publisher(Twist, "cmd_vel_teleop_scan", 10)
+        self.save_map_pub = self.create_publisher(Empty, "save_map_command", 10)
 
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_path_following", 10)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -128,6 +133,21 @@ class PathFollower(Node):
         published from this long-lived node instead of a one-shot CLI pub.
         """
         self.fsm_command_pub.publish(String(data=key))
+
+    def drive_teleop(self, linear, angular):
+        """Drives teleop_scan.py's robot -- only takes effect while fsm_node
+        is in TELEOP SCAN mode, same as pressing wasd in its own terminal.
+        """
+        msg = Twist()
+        msg.linear.x = float(linear)
+        msg.angular.z = float(angular)
+        self.teleop_vel_pub.publish(msg)
+
+    def save_teleop_map(self):
+        """Tells teleop_scan.py to save its map now (same as pressing m in
+        its own terminal); works even if that process has no real terminal.
+        """
+        self.save_map_pub.publish(Empty())
 
     def process_odom(self, msg):
         self.x = msg.pose.pose.position.x
@@ -617,16 +637,27 @@ class ControlPanel:
     """
 
     REFRESH_MS = 200
+    DRIVE_MS = 100
     MODES = (
         ("Teleop Scan", "t"),
         ("Drive Square", "m"),
         ("Wall Follow", "g"),
         ("Path Following", "p"),
     )
+    # arrow key -> (linear, angular) sign; held keys are summed and scaled
+    DRIVE_KEYS = {
+        "Up": (1.0, 0.0),
+        "Down": (-1.0, 0.0),
+        "Left": (0.0, 1.0),
+        "Right": (0.0, -1.0),
+    }
 
     def __init__(self, node, ui_queue):
         self.node = node
         self.ui_queue = ui_queue
+        self.held_keys = set()
+        self.linear_speed = 0.15
+        self.angular_speed = 0.6
 
         self.root = tk.Tk()
         self.root.title("Neato FSM control panel")
@@ -645,6 +676,28 @@ class ControlPanel:
                  "Scan; Path Following opens the drawing window below.",
                  anchor="w", fg="#555555").pack(side=tk.TOP, fill=tk.X, padx=6)
 
+        drive_bar = tk.Frame(self.root)
+        drive_bar.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(8, 0))
+        tk.Label(drive_bar, text="Drive (click here, then use the arrow "
+                 "keys -- switches to Teleop Scan automatically):",
+                 anchor="w").pack(side=tk.TOP, fill=tk.X)
+        self.drive_status = tk.Label(drive_bar, text="not driving", fg="#555555", anchor="w")
+        self.drive_status.pack(side=tk.LEFT)
+        tk.Button(drive_bar, text="Save Map", command=self.save_map).pack(side=tk.RIGHT)
+        self.save_status = tk.Label(drive_bar, text="", fg="#1a7a1a", anchor="e")
+        self.save_status.pack(side=tk.RIGHT, padx=8)
+        # a focus-able target for the arrow keys, separate from the mode
+        # buttons above so Tab/click doesn't accidentally leave it on a
+        # button (where Space/Return would re-trigger that button instead)
+        self.drive_target = tk.Frame(self.root, height=2, bg="#cccccc",
+                                     highlightthickness=1, highlightbackground="#999999")
+        self.drive_target.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(2, 6))
+        self.drive_target.focus_set()
+        for key in self.DRIVE_KEYS:
+            self.root.bind(f"<KeyPress-{key}>", lambda e, k=key: self.on_drive_press(k))
+            self.root.bind(f"<KeyRelease-{key}>", lambda e, k=key: self.on_drive_release(k))
+        self.root.bind("<space>", lambda e: self.held_keys.clear())
+
         tk.Label(self.root, text="Mode history:", anchor="w").pack(
             side=tk.TOP, fill=tk.X, padx=6, pady=(6, 0))
         log_frame = tk.Frame(self.root)
@@ -660,6 +713,39 @@ class ControlPanel:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(self.REFRESH_MS, self.tick)
+        self.root.after(self.DRIVE_MS, self.drive_tick)
+
+    def on_drive_press(self, key):
+        if not self.held_keys and self.node.current_mode != "TELEOP SCAN":
+            self.node.send_fsm_command("t")
+        self.held_keys.add(key)
+
+    def on_drive_release(self, key):
+        self.held_keys.discard(key)
+
+    def drive_tick(self):
+        """Composes the currently-held arrow keys into one Twist and
+        publishes it, the same way teleop_scan.py's own 0.1s timer keeps
+        re-sending whatever the last keypress set -- so releasing every key
+        stops the robot instead of leaving a stale command in flight.
+        """
+        linear = angular = 0.0
+        for key in self.held_keys:
+            lin, ang = self.DRIVE_KEYS[key]
+            linear += lin
+            angular += ang
+        self.node.drive_teleop(linear * self.linear_speed, angular * self.angular_speed)
+        self.drive_status.config(
+            text=f"driving: linear={linear * self.linear_speed:.2f} m/s "
+                 f"angular={angular * self.angular_speed:.2f} rad/s"
+            if self.held_keys else "not driving")
+        self.root.after(self.DRIVE_MS, self.drive_tick)
+
+    def save_map(self):
+        self.node.save_teleop_map()
+        # a separate label from drive_status, which drive_tick overwrites every 100ms
+        self.save_status.config(text=f"saved {datetime.now().strftime('%H:%M:%S')}")
+        self.root.after(3000, lambda: self.save_status.config(text=""))
 
     def tick(self):
         self.status.config(text=f"mode: {self.node.current_mode}")

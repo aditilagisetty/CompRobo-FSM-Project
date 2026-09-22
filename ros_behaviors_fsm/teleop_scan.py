@@ -13,6 +13,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Empty
 
 from .angle_helpers import euler_from_quaternion
 from .room_map import DEFAULT_MAP_FILE, RoomMap
@@ -72,6 +73,10 @@ class TeleopScan(Node):
         self.map_pub = self.create_publisher(OccupancyGrid, "room_map", map_qos)
         self.create_subscription(Odometry, "odom", self.process_odom, 10)
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
+        # lets something other than this process's own raw-stdin keyboard
+        # loop (e.g. the control panel's Save Map button) trigger a save --
+        # useful since that loop doesn't run at all without a real terminal
+        self.create_subscription(Empty, "save_map_command", lambda msg: self.save_map(), 10)
         self.create_timer(0.1, self.publish_velocity)
         self.create_timer(2.0, self.publish_map)
         self.create_timer(5.0, self.report_status)
@@ -238,19 +243,31 @@ def main(args=None):
     # let Ctrl-C raise here so the robot still gets a zero velocity before rclpy shuts down
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = TeleopScan()
-    if not sys.stdin.isatty():
-        node.get_logger().error(
-            "teleop_scan needs to be run from a terminal " "(stdin is not a tty)"
+    interactive = sys.stdin.isatty()
+    if interactive:
+        print(HELP)
+        print(f"Map will be saved to {node.map_file}\n")
+    else:
+        # raw-stdin keyboard control needs a real terminal, which ros2
+        # launch doesn't give this process -- but the node itself (mapping,
+        # publish_velocity, save_map_command) has nothing to do with stdin,
+        # so keep it running rather than exiting outright. Something else
+        # can still drive it by publishing cmd_vel_teleop_scan directly
+        # (e.g. the control panel's arrow keys) and trigger a save over
+        # save_map_command (e.g. its Save Map button).
+        node.get_logger().warn(
+            "no real terminal (stdin is not a tty) -- keyboard driving here "
+            "is unavailable, but mapping continues from whatever publishes "
+            "cmd_vel_teleop_scan; save with `ros2 topic pub -1 "
+            "save_map_command std_msgs/Empty {}` or the control panel"
         )
-        node.destroy_node()
-        rclpy.shutdown()
-        return
-    print(HELP)
-    print(f"Map will be saved to {node.map_file}\n")
     spin_thread = Thread(target=rclpy.spin, args=(node,))
     spin_thread.start()
     try:
-        keyboard_loop(node)
+        if interactive:
+            keyboard_loop(node)
+        else:
+            spin_thread.join()
     except KeyboardInterrupt:
         pass
     finally:
