@@ -70,9 +70,18 @@ Key design choices, each explained in the sections below:
 2. *The slowdown counted the forward pull as repulsion.* After the latest commit the length used for the slowdown included the constant attraction, so open space gave 0.05 m/s instead of 0.10.
 3. *The repulsion is a sum over every ray, while the attraction is one constant.* With `k_repulsive = 1.0`, a wall 0.5 m to one side cut the forward speed to about 0.002 m/s, so the robot effectively did not move near walls.
 
-**The fixes.** Ray `i` is now at angle `i * angle_increment` from the front, both in `_range_at_angle` (wrapping at 360 rays per turn, not 361) and in the force sum. The slowdown again subtracts the forward pull, and `k_repulsive` is 0.02 as a starting value. On scans laid out like the simulator's this gives 0.10 m/s in open space, a hard stop for an obstacle 0.25 m ahead, and a turn away from a wall 0.5 m to either side at 0.055 m/s. On the 480 real scans in the two bags, the hard-stop cone matched the ray-0 window every time. These are checks of the code, not of the robot: it has not been re-run in Gazebo and `k_repulsive` is not tuned. Two design limits remain. The hard stop has no recovery motion, and a wall dead ahead is symmetric, so the field produces no steering until the hard stop triggers. The FSM's own `COLLISION_AVOIDANCE` state is a simpler separate implementation; it had the same scan-indexing bug, now fixed (see the FSM section).
+**The fixes.** Ray `i` is now at angle `i * angle_increment` from the front, both in `_range_at_angle` (wrapping at 360 rays per turn, not 361) and in the force sum. The slowdown again subtracts the forward pull, and `k_repulsive` is 0.02 as a starting value. On scans laid out like the simulator's this gives 0.10 m/s in open space, a hard stop for an obstacle 0.25 m ahead, and a turn away from a wall 0.5 m to either side at 0.055 m/s. On the 480 real scans in the two bags, the hard-stop cone matched the ray-0 window every time. The FSM's own `COLLISION_AVOIDANCE` state is a simpler separate implementation; it had the same scan-indexing bug, now fixed (see the FSM section).
 
-**Demo.** Bag: TODO (`bags/collision_avoidance_demo`). It should show both a bump-triggered stop and a lidar-triggered stop.
+**Two more bugs found and fixed live in Gazebo, 2026-09-22.** A teammate reported obstacle avoidance "just rams into the object" (the topic-mismatch fix in `fsm_node.py`, above, addressed that one) and separately asked whether it steers around obstacles or just stops. Testing that directly, facing the robot at an obstacle dead-on and letting it run:
+
+1. *A symmetric obstacle produced a maxed-out, flip-flopping turn with no forward motion.* An obstacle straight ahead is the same distance on both sides of center, so the un-rotated repulsion summed to a vector pointing almost exactly backward. `atan2(net_y, net_x)` then sits on the +/-pi discontinuity, where floating-point noise flips the sign every scan -- confirmed live: `angular.z` alternated between the +1.0 and -1.0 rad/s clamp while `linear.x` stayed 0, and the robot's true position (checked directly against the simulator, not `/odom`) did not move for 10 straight seconds. Fixed by rotating every repulsive contribution in `compute_potential_field` by a fixed 20-degree bias (`self.repulsion_bias_angle`), so a symmetric obstacle no longer produces a force sitting exactly on that discontinuity -- verified offline first (the same symmetric input now gives a consistent heading every time, across several distances, with no change to the open-space or single-sided-obstacle cases), then live (the robot turned one direction and stayed turning, instead of alternating).
+2. *Even with that fixed, the robot could still get stuck at a distance right at the hard-stop threshold.* Steering moved it just far enough to clear the threshold, the very next scan put it right back under it, and `cmd_vel` ended up alternating between a real command and an exact `(0, 0)` on almost every single message. With the wheels' real acceleration limit (see Behavior 1), each between-stops command was too short-lived to ever build actual speed, so the robot again did not move, confirmed the same way. Fixed with hysteresis: `stop_distance_clear` (0.4 m) and `side_stop_distance_clear` (0.32 m) are now required to *release* a hard stop, wider than the 0.3 m/0.22 m that *trigger* one. Re-verified live in the same scenario: the robot moved a real 0.4 m away and its distance to the obstacle grew from 0.4 m to just over 1.0 m in 15 s, instead of staying flat.
+
+One design limit remains, not yet tested: the hard stop still has no recovery motion once it does hold (bump, or something within the tighter thresholds even after hysteresis) -- it just stops and waits for the obstacle to move or clear on its own.
+
+**Current problem: this node does not move the robot when run alone.** It now publishes to `cmd_vel_collision_avoidance`, not `cmd_vel` -- confirmed live: running `ros2 run ros_behaviors_fsm collision_avoidance` by itself in Gazebo leaves `/cmd_vel` with zero publishers. The rename was made to feed the new gateway node (`fsm_node.py`, see [Finite State Machine](#a-second-in-progress-fsm-fsm_nodepy)); that gateway originally subscribed to a different topic name (`cmd_vel_obstacle_avoidance`), so the two did not connect there either, until we fixed the name mismatch (see What We Verified). It still needs `fsm_node.py` running to reach the robot at all -- there is no way to see collision avoidance move the robot with just this one node.
+
+**Demo.** [bags/collision_avoidance_demo](bags/collision_avoidance_demo) shows real motion, but it was recorded with a build from before the `cmd_vel_collision_avoidance` rename that has since been rebuilt away (see What We Verified); it does not reflect the code in the repository now. No bump-triggered stop appears in it (`/bump` has 0 messages).
 
 ### Behavior 3: Wall Following
 
@@ -87,9 +96,11 @@ Key design choices, each explained in the sections below:
 
 **Status.** According to the commit history the standalone version was run in the simulator ("Woks on both sides, but it is a bit choppy"); there is no bag of it yet. One possible cause of the choppiness that we did not test is that it re-picks the side on every scan, so it can switch walls when both are in range. It also still has unused variables (`is_turning`, `turn_start_time`, `turn_duration`), prints debug lines on every scan, and only filters `inf` and `nan` for the three wall readings, so a `0.0` reading would count as a wall at zero distance. The simulator does not produce `0.0` readings, but we have not checked the physical robot.
 
-The FSM version had the scan-layout problem described under Behavior 2: with the simulator's layout it picked the opposite side and turned away from a wall that was too far and toward one that was too close, for both left and right walls. That is fixed, and on synthetic scans it now picks the right side and steers correctly on both. It has not been tuned or run in Gazebo. Neither version publishes the wall-detection `Marker` the assignment asks for, and the two use different target distances (1.0 m versus 0.4 m), so they will not behave identically.
+The FSM version had the scan-layout problem described under Behavior 2: with the simulator's layout it picked the opposite side and turned away from a wall that was too far and toward one that was too close, for both left and right walls. That is fixed, and on synthetic scans it now picks the right side and steers correctly on both. It has not been tuned or run in Gazebo with a real wall. Neither version publishes the wall-detection `Marker` the assignment asks for, and the two use different target distances (1.0 m versus 0.4 m), so they will not behave identically.
 
-**Demo.** Bag: TODO (`bags/wall_follower_demo`, recorded together with the wall marker topic).
+**Current problem: this node does not move the robot when run alone, as documented.** Like `collision_avoidance.py`, it now publishes to `cmd_vel_wall_follower`, not `cmd_vel` -- confirmed live, `/cmd_vel` had zero publishers while it ran by itself. It does work when run together with the new `fsm_node.py` gateway (see [Finite State Machine](#a-second-in-progress-fsm-fsm_nodepy)): with no wall in range it drove forward while searching, and `fsm_node.py` correctly forwarded that to `/cmd_vel`. That combination is not what the "How To Run" section currently describes, though, and `fsm_node.py`'s own launch file does not work yet either.
+
+**Demo.** [bags/wall_follower_demo](bags/wall_follower_demo) has the same stale-build issue as `bags/collision_avoidance_demo` (see What We Verified); it does not reflect the code in the repository now. It also has no wall marker topic.
 
 ### Behavior 4: Mapping, A* Planning and Path Following (self-designed)
 
@@ -168,9 +179,25 @@ What the data shows:
 
 TODO: FSM run with a path started mid-drive and an obstacle introduced (`bags/finite_state_controller_demo`). The path-following handoff signal itself, `/path_following_status`, is present in [bags/path_following_demo](bags/path_following_demo).
 
+### A second, in-progress FSM: `fsm_node.py`
+
+While writing this section, a teammate committed a second, different state-machine design: [fsm_node.py](ros_behaviors_fsm/fsm_node.py) and [fsm.launch.py](ros_behaviors_fsm/fsm.launch.py), added in commits `f02ca4e` ("Made progress on the fsm but only halfway there") and `ae49987`. It is registered in `setup.py` alongside `finite_state_controller.py`, as a separate `fsm_node` executable; the two have not been reconciled into one FSM, and it is not yet decided which one this project submits.
+
+**The design is different: a topic-mux gateway instead of one node with sensor callbacks.** `wall_follower.py` and `collision_avoidance.py` each publish `Twist` on their own topic (`cmd_vel_wall_follower`, `cmd_vel_collision_avoidance`) instead of `cmd_vel`. `fsm_node.py` subscribes to those, plus a `cmd_vel_teleop_scan` and the raw `scan`, and republishes whichever one matches its current state (a plain string: `"WALL FOLLOW"`, `"OBSTACLE AVOIDANCE"`, or `"TELEOP SCAN"`) to `cmd_vel`. The state itself switches on the closest reading in a +/-10 ray cone (`OBSTACLE AVOIDANCE` under 0.5 m, back to `WALL FOLLOW` over 0.7 m), or manually by pressing `t` or `a` on the keyboard. This explains the topic renames in `wall_follower.py` and `collision_avoidance.py` described under Behaviors 2 and 3 -- they were made to feed this gateway, not a mistake on their own -- but the gateway itself is not finished, and running the standalone nodes without it (as the current "How To Run" section describes) no longer works, as described in Behaviors 2 and 3 and in What We Verified.
+
+**What we found running it (2026-09-21, live in Gazebo):**
+
+- `ros2 launch ros_behaviors_fsm fsm.launch.py`, exactly as its own file implies it should be run, fails immediately. The launch file was never added to `setup.py`'s `data_files`, so it is not installed anywhere `ros2 launch` looks. It also gives each of the three nodes a different package name (`wall_follower`, `collision_avoidance`, `fsm_node`); all three are executables inside the single `ros_behaviors_fsm` package, so even an installed copy would still fail to find those packages.
+- Running the three nodes by hand instead, wall following worked: with no wall in range it drove forward while turning to search, and `fsm_node.py` correctly forwarded that command to `cmd_vel`, and the robot moved.
+- **Fixed, 2026-09-21, later the same evening.** `collision_avoidance.py` published `cmd_vel_collision_avoidance`; `fsm_node.py` subscribed to a different name, `cmd_vel_obstacle_avoidance`, so nothing was ever forwarded -- confirmed directly with `ros2 topic info` on both, and this is what a teammate saw as "obstacle avoidance doesn't work, it just rams into the object." Changed `fsm_node.py`'s subscription to `cmd_vel_collision_avoidance` to match what the node actually publishes. Re-verified live: `/cmd_vel_collision_avoidance` now shows 1 publisher and 1 subscriber (was 1 and 0), and a drive-into-a-cube test with all three nodes running stopped the robot about 0.33 m short with no bump, though in that run the stop came from `wall_follower.py`'s own front-distance check (it turns away from anything within 1.0 m on its own) rather than from `"OBSTACLE AVOIDANCE"` actually triggering -- we still have not directly observed that state fire and forward a message end to end.
+- There is no bump subscription anywhere in `fsm_node.py`, so nothing here reacts to a physical bump the way `finite_state_controller.py`'s `bumped` flag does.
+- The keyboard listener that `t`/`a` depend on runs `termios.tcgetattr(sys.stdin)` in a background thread, which raises immediately if stdin is not an interactive terminal. We hit exactly this running it from a script; it would happen the same way under `ros2 launch`, or in any background/non-interactive process. The thread dies silently (it is a daemon thread), the node keeps running in the state it was last in, and the manual switch stops working.
+
+None of this made it into "What We Verified" as failures we invented to find fault -- they are the direct, reproducible result of running the files as committed. The teammate's own commit message already says this is half finished, so nothing above should be read as a regression; it is a status report on work in progress.
+
 ## What We Verified
 
-A check run on 2026-09-21 against synthetic inputs and the two recorded bags. Nothing here was run in Gazebo.
+**First pass, 2026-09-21 (earlier that day):** synthetic inputs and the two recorded bags only. Nothing was run in Gazebo.
 
 | Check | How | Result |
 |---|---|---|
@@ -187,17 +214,29 @@ A check run on 2026-09-21 against synthetic inputs and the two recorded bags. No
 | Docs | Checked every local link and figure in both documents | All exist |
 | Style tests | `pytest test/` | `test_flake8` (152 issues) and `test_pep257` (137 issues) fail; `test_copyright` is skipped. They do not affect the robot |
 
-**Not checked:** Gazebo runs of the drive square, collision avoidance, wall following or the FSM, the `icp_localizer` node with a real map, the path-following GUI, the teleop keyboard loop, and the physical robot.
+**Second pass, 2026-09-21 (same evening, after the bags were recorded and a teammate pushed `fsm_node.py`):** live in Gazebo this time, against the code on disk at the time of each test.
+
+| Check | How | Result |
+|---|---|---|
+| `finite_state_controller.py`, `COLLISION_AVOIDANCE` | Placed the robot facing a 0.5 m cube (`cube_20k_1`) with a 1 m runway, ran the node, logged the true simulator pose every second for 12 s | Drove forward for about 2 s, then backed away while turning at the obstacle, matching `handle_collision_avoidance`. **This is the first live Gazebo confirmation of any FSM transition.** |
+| `collision_avoidance` and `wall_follower`, run exactly as the "How To Run" section says | `ros2 run ros_behaviors_fsm collision_avoidance` (then `wall_follower`), each alone, and checked `ros2 topic info /cmd_vel` while it ran | **Zero publishers on `/cmd_vel` for either.** Both nodes run without error but currently publish to `cmd_vel_collision_avoidance` and `cmd_vel_wall_follower`, which nothing in the simulator subscribes to. The robot does not move. This is not what Behaviors 2 and 3 currently say. |
+| Why the recorded bags look fine despite that | Diffed the installed executable against the source right after the bags were recorded | The installed `collision_avoidance` still published to `/cmd_vel` -- the rename to `cmd_vel_collision_avoidance` was already committed, but `colcon build` had not been re-run before recording. The bags show a build that no longer exists on disk. |
+| `fsm_node.py` + `fsm.launch.py` (new, from `f02ca4e`/`ae49987`, the author's message says "only halfway there") | `ros2 launch ros_behaviors_fsm fsm.launch.py` | Fails immediately: the file was never added to `setup.py`'s `data_files`, so it is not installed under `share/ros_behaviors_fsm/`. It also names `wall_follower`, `collision_avoidance` and `fsm_node` as three separate packages; all three executables actually live in `ros_behaviors_fsm`. |
+| Same three nodes, started by hand instead of through the launch file (before the fix below) | `ros2 run` all three (`wall_follower`, `collision_avoidance`, `fsm_node`) together, watched `/cmd_vel` and the simulator pose for 10 s | Wall following's output reached `/cmd_vel` through the gateway and the robot moved. Collision avoidance's never could: `fsm_node.py` subscribed to `cmd_vel_obstacle_avoidance`, but `collision_avoidance.py` publishes to `cmd_vel_collision_avoidance` -- confirmed directly, `ros2 topic info` showed 0 subscribers on the one and 0 publishers on the other. In this 10 s run the robot curved away from the cube while searching for a wall and never got close enough to trigger `OBSTACLE AVOIDANCE`, so we could not also observe the robot failing to stop; the topic mismatch alone was enough to know it would have ignored an obstacle if that state had been reached. |
+| `fsm_node.py`'s `cmd_vel_obstacle_avoidance`/`cmd_vel_collision_avoidance` mismatch, after fixing it | Changed `fsm_node.py`'s subscription to `cmd_vel_collision_avoidance`, rebuilt, reran the same three-node test facing the cube | `/cmd_vel_collision_avoidance` now shows 1 publisher and 1 subscriber. The robot stopped about 0.33 m from the cube with no `/bump` messages, though the stop we observed came from `wall_follower.py`'s own front-distance check, not a confirmed `OBSTACLE AVOIDANCE` firing -- `fsm_node`'s printed state stayed `"WALL FOLLOW"` for the whole run. |
+| `fsm_node.py`'s keyboard listener (`t`/`a` to switch mode) | Ran the node with stdin that is not an interactive terminal (true for anything started through `ros2 launch`, and for our own test) | The listener thread crashes immediately (`termios.error: (25, 'Inappropriate ioctl for device')`). It is a daemon thread, so the node itself keeps running in the initial `"WALL FOLLOW"` state, but the manual mode switch this design depends on is unavailable. |
+
+**Not checked:** the drive square or the FSM's `WALL_FOLLOWING`/`PATH_FOLLOWING` states live in Gazebo, `fsm_node.py` actually reaching its `"OBSTACLE AVOIDANCE"` state, the `icp_localizer` node with a real map, the path-following GUI, the teleop keyboard loop, and the physical robot.
 
 ## Team Contributions
 
-**TODO before submitting: the middle column below comes only from the git history (who committed each file), so it shows who wrote the code but not who designed or debugged it. Confirm it and fill in the last column.**
+**TODO before submitting: the middle column below is every author `git log` shows for each file, in commit order, so several files have more than one name. It shows who touched the code, not who designed or debugged which part. Confirm it and fill in the last column.**
 
-| Person | Files committed (from git history) | Other contributions |
+| Person | Files committed (from git history, most files have more than one author) | Other contributions |
 |---|---|---|
-| Aditi | `drive_square.py`, `collision_avoidance.py`, `finite_state_controller.py`, `a_star.py`, early `wall_follower.py`, `README.md`, `WRITEUP.md` | TODO |
-| Duc | `teleop_scan.py`, `room_map.py`, `path_following.py`, the ICP scaffolding (`icp_localizer.py`, `icp_matching.py`), the `teleop_scan_demo` and `path_following_demo` bags | TODO |
-| Akil | `wall_follower.py` (wall-following and turning logic) | TODO |
+| Aditi | `drive_square.py`, `a_star.py`, `README.md`, `WRITEUP.md`; also committed to `collision_avoidance.py`, `finite_state_controller.py`, `path_following.py`, `icp_localizer.py`, `icp_matching.py` | TODO |
+| Duc | `room_map.py`; also committed to `collision_avoidance.py`, `teleop_scan.py`, `path_following.py`, `icp_localizer.py`, `icp_matching.py`; recorded the `teleop_scan_demo` and `path_following_demo` bags and the demo bags for all six behaviors | TODO |
+| Akil | `fsm_node.py`, `fsm.launch.py`; also committed to `collision_avoidance.py`, `wall_follower.py`, `finite_state_controller.py`, `teleop_scan.py`, `path_following.py` | TODO |
 
 ## Learning Objectives and Final Takeaways
 
@@ -213,6 +252,8 @@ A check run on 2026-09-21 against synthetic inputs and the two recorded bags. No
 - The first several explanations for "the square looks wrong" were about our controller. The controller was fine by odometry and RViz; what looked wrong was the Gazebo viewport. We never established why, which is a reminder that `/odom` in simulation is derived from the same wheel model and is not independent ground truth.
 - Behaviors written separately can collide. Several nodes publishing `cmd_vel` at once is easy to create by accident and needs an explicit handoff.
 - The simulator's scan layout is not what its header suggests. `/scan` says `angle_min = -pi` and has 361 rays, but the lidar is mounted rotated 180 degrees, so ray 0 is the front. Code that indexed from the front (drive square, wall follower, mapping, path following) works; code that trusted `angle_min` (collision avoidance and the FSM) looked backward until we fixed it. We only found this at the end, because our synthetic test scans used a different layout. We had also assumed missing readings show up as `0.0`; in the simulator they are `inf`.
+- A rebuild is not automatic. `collision_avoidance_demo` and `wall_follower_demo` were recorded after `collision_avoidance.py` and `wall_follower.py` were changed to publish to a different topic, but `colcon build` was not re-run first, so the recording used the previous behavior and looked correct. Checking the installed executable's actual content, not just the source file, is what caught it.
+- Renaming a topic to prepare for a not-yet-finished consumer breaks the previous consumer immediately. Once `collision_avoidance.py` and `wall_follower.py` stopped publishing `cmd_vel` (to feed the new `fsm_node.py` gateway), running either one alone -- exactly as our own "How To Run" instructions say to -- stopped moving the robot at all, and the gateway they were renamed for is not finished either. A brief note in a commit message or a shared channel would have caught this before it reached the write-up.
 
 **What we would do with more time.**
 
@@ -247,13 +288,14 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
    ```bash
    ros2 launch neato2_gazebo neato_maze.py      # or empty_world.py, neato_gauntlet_world.py
    ```
-3. Run one behavior at a time (each publishes `cmd_vel`, so do not run two together):
+3. Run one behavior at a time:
    ```bash
-   ros2 run ros_behaviors_fsm drive_square
-   ros2 run ros_behaviors_fsm collision_avoidance
-   ros2 run ros_behaviors_fsm wall_follower
-   ros2 run ros_behaviors_fsm finite_state_controller
+   ros2 run ros_behaviors_fsm drive_square              # publishes cmd_vel directly -- moves the robot
+   ros2 run ros_behaviors_fsm finite_state_controller   # publishes cmd_vel directly -- moves the robot
+   ros2 run ros_behaviors_fsm collision_avoidance       # publishes cmd_vel_collision_avoidance -- alone, does NOT move the robot
+   ros2 run ros_behaviors_fsm wall_follower             # publishes cmd_vel_wall_follower -- alone, does NOT move the robot
    ```
+   The last two need `fsm_node.py` (or a manual `ros2 topic pub`/remap onto `cmd_vel`) to actually drive the robot; see [A second, in-progress FSM](#a-second-in-progress-fsm-fsm_nodepy). `ros2 launch ros_behaviors_fsm fsm.launch.py` does not work yet either. Do not run two `cmd_vel`-publishing nodes at once.
 4. Mapping and path following:
    ```bash
    ros2 run ros_behaviors_fsm teleop_scan       # drive around, press m to save, Ctrl-C to quit
@@ -283,7 +325,8 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 | `ros_behaviors_fsm/drive_square.py` | Odometry-based square driving with e-stop |
 | `ros_behaviors_fsm/collision_avoidance.py` | Hard stop plus potential-field steering |
 | `ros_behaviors_fsm/wall_follower.py` | Standalone wall follower (left or right wall) |
-| `ros_behaviors_fsm/finite_state_controller.py` | The state machine |
+| `ros_behaviors_fsm/finite_state_controller.py` | One state machine: sensor callbacks plus per-state handlers in a single node |
+| `ros_behaviors_fsm/fsm_node.py`, `fsm.launch.py` | A second, in-progress state machine: a topic-mux gateway. Not reconciled with the file above; its launch file does not currently work (see What We Verified) |
 | `ros_behaviors_fsm/teleop_scan.py`, `room_map.py` | Keyboard driving and occupancy-grid mapping |
 | `ros_behaviors_fsm/a_star.py` | A* planner with obstacle inflation |
 | `ros_behaviors_fsm/path_following.py` | Path GUI, planning entry points, pure-pursuit follower |
@@ -296,14 +339,20 @@ Prerequisites: ROS 2 Jazzy, the `neato_packages` workspace (`neato2_gazebo`, `ne
 
 Still open at the time of writing:
 
-- [ ] Bags still to record: `test_drive`, `drive_square_demo`, `collision_avoidance_demo` (needs both a bump-triggered and a lidar-triggered stop), `wall_follower_demo` (also record the wall marker topic), `finite_state_controller_demo`. Already done: `path_following_demo`, `teleop_scan_demo`.
-- [ ] Wall-detection `Marker` (required by the assignment for wall following).
 - [x] Fix the scan indexing in `collision_avoidance.py` and `finite_state_controller.py`, the slowdown, and the `k_repulsive` scale (checked on synthetic scans and the recorded bags).
-- [ ] Re-run collision avoidance and the FSM in the simulator after that fix, and tune `k_repulsive`, `k_steer` and the wall-following gains. Add a recovery motion after the hard stop.
+- [x] Bags recorded for all six behaviors: `drive_square_demo`, `collision_avoidance_demo`, `wall_follower_demo`, `finite_state_controller_demo`, `path_following_demo`, `teleop_scan_demo`. **But** the `collision_avoidance_demo` and `wall_follower_demo` bags were recorded with a build from before the `cmd_vel_collision_avoidance`/`cmd_vel_wall_follower` rename and no longer match the code (see What We Verified) -- re-record both after the topic wiring below is settled.
+- [ ] **`collision_avoidance.py` and `wall_follower.py` do not move the robot when run alone**, confirmed live: they publish to `cmd_vel_collision_avoidance`/`cmd_vel_wall_follower`, and nothing currently connects those to `cmd_vel` correctly (see the new `fsm_node.py` items below). Either fix the wiring or update "How To Run" to say a gateway node is required.
+- [ ] **`fsm_node.py`'s launch file does not run:** `fsm.launch.py` is missing from `setup.py`'s `data_files` and names three packages that do not exist (`wall_follower`, `collision_avoidance`, `fsm_node` -- all three executables are in `ros_behaviors_fsm`). Fix both, or drop the launch file and document running the three nodes by hand.
+- [x] `fsm_node.py` subscribed to `cmd_vel_obstacle_avoidance`, but `collision_avoidance.py` publishes `cmd_vel_collision_avoidance` -- different names, so nothing was forwarded. This is what showed up as "obstacle avoidance doesn't work, it just rams into the object." Fixed by changing `fsm_node.py`'s subscription to `cmd_vel_collision_avoidance`; re-verified live (see What We Verified). Still open: we have not directly observed `"OBSTACLE AVOIDANCE"` fire and forward a message end to end, only that the topics now match and the robot avoided the cube in one run (via `wall_follower.py`'s own check, not confirmed via this state).
+- [ ] **`fsm_node.py` has no bump subscription.** Decide whether that state machine needs one, or document that bump handling is `finite_state_controller.py`-only.
+- [ ] **`fsm_node.py`'s keyboard listener crashes when stdin is not an interactive terminal** (confirmed: `termios.error: (25, 'Inappropriate ioctl for device')`), which is the normal case under `ros2 launch` or in the background. The daemon thread dies silently and the manual `t`/`a` mode switch stops working; the node itself keeps running.
+- [ ] **Two FSMs now exist** (`finite_state_controller.py` and `fsm_node.py`) and have not been reconciled. Decide which one this project submits, or how they relate, before the write-up's FSM section is final.
+- [ ] Wall-detection `Marker` (required by the assignment for wall following).
+- [ ] Tune `k_repulsive`, `k_steer` and the wall-following gains against real runs. Add a recovery motion after the hard stop.
 - [ ] Decide whether to clean up the style-test failures in `test/`; they do not affect the robot.
-- [ ] Run the FSM end to end in the simulator, and tune the collision-avoidance and wall-following gains.
+- [ ] Run `finite_state_controller.py`'s `WALL_FOLLOWING` and `PATH_FOLLOWING` states, and `drive_square.py`, live in Gazebo -- `COLLISION_AVOIDANCE` is now confirmed live (see What We Verified), the rest are not yet.
 - [ ] Test on the physical Neato.
-- [ ] Add gifs, video or bag graphs for the drive square, collision avoidance, wall following and FSM (Behaviors 1 to 3 and the FSM have no visual demonstration yet). After recording a bag, add it to `figure_*` functions in `docs/make_figures.py`.
+- [ ] Add gifs, video or bag graphs for drive square, wall following and the FSM (collision avoidance now has a live-verified transition described in the write-up, but still no bag that reflects the current code). After recording a bag, add it to `figure_*` functions in `docs/make_figures.py`.
 - [ ] Confirm the Team Contributions table (it is a draft from git history) and fill in each person's other contributions.
 - [ ] Write each person's individual learning objectives.
 - [ ] Confirm the ICP description with whoever is working on it, since it describes the code as it is in the repository now.

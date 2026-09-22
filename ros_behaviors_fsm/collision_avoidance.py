@@ -31,6 +31,8 @@ class CollisionAvoidance(Node):
         # it -- back that up with a tighter hard-stop over a wider cone
         self.side_stop_distance = 0.22
         self.side_cone_deg = 45
+        self.stop_distance_clear = 0.4
+        self.side_stop_distance_clear = 0.32
         self.bumped = False
         self.too_close = False
 
@@ -43,6 +45,11 @@ class CollisionAvoidance(Node):
         # got from wall follower logic for proportional gain for turning net forces direction
         self.k_steer = 1.0  # TODO: also tune -- P gain on head error
         self.max_angular_speed = 1.0  # rad/s
+        # rotates every repulsive force vector by this much so a dead ahead
+        # obstacle doesn't produce a net force that sits exactly on the
+        # atan2 +/-pi discontinuity always
+        # turns left when an obstacle is straight ahead
+        self.repulsion_bias_angle = math.radians(20)
 
     # Ray i points i * msg.angle_increment counterclockwise from the robot's
     # front. the simulator's header says -pi, but the
@@ -85,8 +92,14 @@ class CollisionAvoidance(Node):
     def process_scan(self, msg):
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.side_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=self.side_cone_deg)
-        self.too_close = (self.front_range < self.stop_distance
-                          or self.side_range < self.side_stop_distance)
+        # once too_close is set, it takes the larger *_clear
+        # distance to release it, not just re-crossing the trigger distance
+        if self.too_close:
+            self.too_close = (self.front_range < self.stop_distance_clear
+                              or self.side_range < self.side_stop_distance_clear)
+        else:
+            self.too_close = (self.front_range < self.stop_distance
+                              or self.side_range < self.side_stop_distance)
 
         if self.bumped or self.too_close:
             # Hard-stop safety backstop bc something is already too close
@@ -122,9 +135,8 @@ class CollisionAvoidance(Node):
         scan reading within self.influence_radius.
 
         For each valid range r at angle theta closer than self.influence_radius
-        add a force pointing from the obstacle back toward the robot in
-        direction (-cos(theta), -sin(theta)) with magnitude that grows as
-        r shrinks (e.g. k_repulsive * (1/r - 1/influence_radius)).
+        add a force pointing from the obstacle back toward the robot, rotated
+        by self.repulsion_bias_angle, with magnitude that grows as r shrinks.
         """
         net_x, net_y = self.k_attractive, 0.0  # forward pull
         for i, r in enumerate(msg.ranges):
@@ -133,9 +145,11 @@ class CollisionAvoidance(Node):
 
             theta = i * msg.angle_increment  # angle from the front, see _range_at_angle
             magnitude = self.k_repulsive * (1.0 / r - 1.0 / self.influence_radius)
+            # points from the obstacle back toward the robot (theta + pi)
+            repulsion_angle = theta + math.pi + self.repulsion_bias_angle
 
-            net_x += magnitude * (-math.cos(theta))
-            net_y += magnitude * (-math.sin(theta))
+            net_x += magnitude * math.cos(repulsion_angle)
+            net_y += magnitude * math.sin(repulsion_angle)
 
         return net_x, net_y
 

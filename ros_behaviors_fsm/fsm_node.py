@@ -21,7 +21,7 @@ class FSMNode(Node):
         # Subscription for different nodes to send velocity commands
         self.create_subscription(Twist, "cmd_vel_wall_follower", self.wall_follower, 10)
         self.create_subscription(
-            Twist, "cmd_vel_obstacle_avoidance", self.obstacle_avoidance, 10
+            Twist, "cmd_vel_collision_avoidance", self.obstacle_avoidance, 10
         )
         self.create_subscription(Twist, "cmd_vel_teleop_scan", self.teleop_scan, 10)
 
