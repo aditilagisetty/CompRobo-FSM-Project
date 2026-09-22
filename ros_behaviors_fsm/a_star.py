@@ -1,4 +1,6 @@
 """
+
+
 Searches SavedMap's pixel grid built by teleop_scan.py for a path from a
 start to a goal, avoiding occupied cells nflated by the robot's radius, so
 the found path keeps the robot's whole body clear of walls, not just its
@@ -20,7 +22,8 @@ DEFAULT_ROBOT_RADIUS = 0.16  # meters
 
 
 def inflate_obstacles(image, radius_cells):
-    """Returns a boolean array, True wherever a cell is occupied or within
+    """
+    Returns a boolean array, True wherever a cell is occupied or within
     radius_cells of an occupied cell -- i.e. where the robot's center could
     not be without some part of its body overlapping an obstacle.
     """
@@ -46,8 +49,9 @@ def inflate_obstacles(image, radius_cells):
 
 
 def neighbors(inflated, cell):
-    """gets (neighbor_cell, step_cost) for every valid 8-directional
-    neighbor of `cell` that's in bounds and not occupied
+    """
+    gets (neighbor_cell, step_cost) for every valid 8-directional
+    neighbor of `cell` that's in bounds and not occupied.
     """
     height, width = inflated.shape
     row, col = cell
@@ -65,15 +69,15 @@ def neighbors(inflated, cell):
 
 
 def straight_line_distance(a, b):
-    """straight line distance between two (row, col) cells"""
+    """straight line distance between two (row, col) cells."""
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def find_path(inflated, start, goal):
-    """A* search from start to goal over a precomputed boolean array
-
+    """
+    A* search from start to goal over a precomputed boolean array
     Returns a list of (row, col) cells from start to goal or
-    None if no path exists including if start or goal is itself blocked
+    None if no path exists including if start or goal is itself blocked.
     """
     if inflated[start] or inflated[goal]:
         return None
@@ -104,6 +108,10 @@ def find_path(inflated, start, goal):
 
 
 def _reconstruct_path(came_from, current):
+    """
+    Walk find_path's came_from map backward from current to build the
+    start-to-goal cell path it found.
+    """
     path = [current]
     while current in came_from:
         current = came_from[current]
@@ -113,10 +121,11 @@ def _reconstruct_path(came_from, current):
 
 
 def plan_world_path(saved_map, start_xy, goal_xy, robot_radius=DEFAULT_ROBOT_RADIUS):
-    """takes start/goal as (x, y) world coordinates,
+    """
+    takes start/goal as (x, y) world coordinates,
     inflates the map's obstacles by robot_radius, runs A* over the
     resulting grid, and returns the path as a list of (x, y) world
-    coordinates, or None if no path was found
+    coordinates, or None if no path was found.
     """
     radius_cells = max(1, int(round(robot_radius / saved_map.resolution)))
     inflated = inflate_obstacles(saved_map.image, radius_cells)

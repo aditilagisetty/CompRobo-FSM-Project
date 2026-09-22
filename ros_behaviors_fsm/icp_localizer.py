@@ -1,3 +1,9 @@
+"""
+Correct odometry drift by matching each laser scan against a saved map
+with ICP (icp_matching.py), and publish the corrected pose, the map -> odom
+transform, and a confidence flag.
+"""
+
 import math
 import sys
 from collections import deque
@@ -27,13 +33,25 @@ from .room_map import DEFAULT_MAP_FILE, PIXEL_FREE, PIXEL_OCCUPIED, SavedMap
 
 
 class OdomHistory:
+    """
+    A short rolling buffer of (timestamp, pose) odometry samples, so a
+    scan can be matched against the pose it actually happened at instead of
+    whatever the latest odometry message says.
+    """
+
     def __init__(self):
+        """Keep the last 100 odometry samples."""
         self.samples = deque(maxlen=100)
 
     def add(self, stamp, pose):
+        """Record one (timestamp, (x, y, yaw)) odometry sample."""
         self.samples.append((stamp, pose))
 
     def pose_at(self, stamp):
+        """
+        Interpolate the pose at the given timestamp between the two
+        surrounding samples; None if it's before the oldest one kept.
+        """
         samples = list(self.samples)
         if len(samples) < 2 or stamp < samples[0][0]:
             return None
@@ -50,7 +68,16 @@ class OdomHistory:
 
 
 class ICPLocalizer(Node):
+    """
+    Runs ICP against a saved map on every scan and fuses the result into
+    a corrected pose, rejecting matches that don't look trustworthy.
+    """
+
     def __init__(self):
+        """
+        Load the saved map, declare the ICP/fusion tuning parameters, and
+        set up the odom/scan subscriptions and pose/TF/confidence publishers.
+        """
         super().__init__("icp_localizer")
         self.declare_parameter("map_file", DEFAULT_MAP_FILE)
         self.declare_parameter("lidar_offset_x", -0.084)
@@ -99,6 +126,11 @@ class ICPLocalizer(Node):
         self.publish_saved_map()
 
     def process_odom(self, msg):
+        """
+        Track the latest odometry pose, record it in the pose history for
+        process_scan to interpolate against, and republish the corrected
+        estimate.
+        """
         q = msg.pose.pose.orientation
         _, _, yaw = euler_from_quaternion(q.x, q.y, q.z, q.w)
         self.odom_pose = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw)
@@ -111,6 +143,11 @@ class ICPLocalizer(Node):
         self.publish_estimate()
 
     def process_scan(self, msg):
+        """
+        Run ICP against the odometry pose at this scan's own timestamp,
+        fuse the result into the running correction, and publish the
+        transformed scan and confidence.
+        """
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         odom_at_scan = self.history.pose_at(stamp)
         if odom_at_scan is None or self.spin_rate > self.max_spin:
@@ -141,8 +178,9 @@ class ICPLocalizer(Node):
         self.publish_confidence(self.scans_matched > matched_before)
 
     def publish_confidence(self, scan_matched):
-        """Confident once enough of the last few scans passed fuses checks,
-        so a single bad scan doesn't flip answer
+        """
+        Confident once enough of the last few scans passed fuses checks,
+        so a single bad scan doesn't flip answer.
         """
         self.recent_matches.append(scan_matched)
         self.confident = (
@@ -152,6 +190,11 @@ class ICPLocalizer(Node):
         self.confidence_pub.publish(Bool(data=self.confident))
 
     def fuse(self, predicted, result):
+        """
+        Accept the ICP result only if enough points matched, the fit is
+        tight, and it isn't a wild jump from the odometry prediction; blend
+        toward it by self.gain rather than snapping straight to it.
+        """
         if result is None:
             return predicted
         pose, inlier_fraction, rms = result
@@ -174,6 +217,10 @@ class ICPLocalizer(Node):
         )
 
     def publish_estimate(self):
+        """
+        Publish the corrected pose and the map -> odom transform it
+        implies.
+        """
         x, y, yaw = compose(self.correction, self.odom_pose)
 
         tf = TransformStamped()
@@ -196,6 +243,10 @@ class ICPLocalizer(Node):
         self.pose_pub.publish(pose)
 
     def publish_scan_in_map(self, points, robot_pose):
+        """
+        Publish the scan's points transformed into the map frame at the
+        given pose, as an RViz point marker, for visually checking the fit.
+        """
         marker = Marker()
         marker.header.stamp = self.odom_stamp
         marker.header.frame_id = "map"
@@ -212,6 +263,10 @@ class ICPLocalizer(Node):
         self.scan_pub.publish(marker)
 
     def publish_saved_map(self):
+        """
+        Publish the saved map once, latched, as an OccupancyGrid for
+        RViz.
+        """
         grid = np.full(self.saved_map.image.shape, -1, dtype=np.int8)
         grid[self.saved_map.image == PIXEL_FREE] = 0
         grid[self.saved_map.image == PIXEL_OCCUPIED] = 100
@@ -227,6 +282,10 @@ class ICPLocalizer(Node):
         self.map_pub.publish(msg)
 
     def report_status(self):
+        """
+        Log the odometry pose, corrected pose, correction, and match
+        counts every couple of seconds.
+        """
         if not self.have_odom:
             return
         x, y, yaw = compose(self.correction, self.odom_pose)
@@ -241,6 +300,10 @@ class ICPLocalizer(Node):
 
 
 def main(args=None):
+    """
+    Initialize rclpy, spin the node until interrupted, then shut down
+    Exits with an error if no saved map can be loaded.
+    """
     rclpy.init(args=args)
     try:
         node = ICPLocalizer()

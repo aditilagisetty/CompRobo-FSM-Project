@@ -1,3 +1,8 @@
+"""
+A 2D occupancy-grid map built from laser scans (RoomMap, written while
+driving) and read back from disk for planning and drawing (SavedMap).
+"""
+
 import math
 import os
 
@@ -13,6 +18,8 @@ PIXEL_UNKNOWN = 205
 
 
 class RoomMap:
+    """A log-odds occupancy grid, updated one laser scan at a time."""
+
     HIT_UPDATE = 0.85
     MISS_UPDATE = -0.4
     LOG_ODDS_LIMIT = 5.0
@@ -20,6 +27,10 @@ class RoomMap:
     FREE_BELOW = -0.2
 
     def __init__(self, size_m=20.0, resolution=0.05, origin_x=None, origin_y=None):
+        """
+        Create an empty (all-unknown) square grid size_m wide, centered
+        on the origin unless origin_x/origin_y are given explicitly.
+        """
         self.resolution = resolution
         self.size = int(round(size_m / resolution))
         self.origin_x = -size_m / 2.0 if origin_x is None else origin_x
@@ -27,6 +38,7 @@ class RoomMap:
         self.log_odds = np.zeros((self.size, self.size), dtype=np.float32)
 
     def world_to_cell(self, x, y):
+        """Convert world coordinates (meters) to grid cell (col, row)."""
         col = np.floor((x - self.origin_x) / self.resolution).astype(int)
         row = np.floor((y - self.origin_y) / self.resolution).astype(int)
         return col, row
@@ -42,6 +54,11 @@ class RoomMap:
         range_max,
         lidar_offset_x=0.0,
     ):
+        """
+        Fold one laser scan into the grid from robot pose (x, y, yaw):
+        mark the cell each beam ends in more likely occupied, and every
+        cell along the beam before that more likely free.
+        """
         ranges = np.asarray(ranges, dtype=np.float64)
         # beam i points i * angle_increment ccw from the front, so ranges[0] is straight ahead
         angles = yaw + np.arange(len(ranges)) * angle_increment
@@ -66,6 +83,10 @@ class RoomMap:
         self._update(ox + dx * ranges, oy + dy * ranges, self.HIT_UPDATE)
 
     def _update(self, xs, ys, delta):
+        """
+        Add delta once to every distinct in-bounds cell containing one of
+        the given world points, clamped to +/- LOG_ODDS_LIMIT.
+        """
         cols, rows = self.world_to_cell(xs, ys)
         inside = (cols >= 0) & (cols < self.size) & (rows >= 0) & (rows < self.size)
         flat = np.unique(rows[inside] * self.size + cols[inside])
@@ -75,18 +96,30 @@ class RoomMap:
         )
 
     def to_occupancy_data(self):
+        """
+        Flatten the grid to nav_msgs/OccupancyGrid's data convention:
+        -1 unknown, 0 free, 100 occupied.
+        """
         data = np.full(self.log_odds.shape, -1, dtype=np.int8)
         data[self.log_odds < self.FREE_BELOW] = 0
         data[self.log_odds > self.OCCUPIED_ABOVE] = 100
         return data.reshape(-1).tolist()
 
     def to_image(self):
+        """
+        Render the grid as a grayscale image (map_server convention:
+        free is light, occupied is dark, unknown is mid-gray).
+        """
         image = np.full(self.log_odds.shape, PIXEL_UNKNOWN, dtype=np.uint8)
         image[self.log_odds < self.FREE_BELOW] = PIXEL_FREE
         image[self.log_odds > self.OCCUPIED_ABOVE] = PIXEL_OCCUPIED
         return np.flipud(image)
 
     def save(self, yaml_path=DEFAULT_MAP_FILE):
+        """
+        Write the map as a standard map_server PGM + YAML pair and
+        return the YAML path.
+        """
         yaml_path = os.path.expanduser(yaml_path)
         os.makedirs(os.path.dirname(os.path.abspath(yaml_path)), exist_ok=True)
         pgm_path = os.path.splitext(yaml_path)[0] + ".pgm"
@@ -110,7 +143,13 @@ class RoomMap:
 
 
 class SavedMap:
+    """
+    A map loaded back from disk, for planning (a_star.py) and drawing
+    (path_following.py) against.
+    """
+
     def __init__(self, image, resolution, origin_x, origin_y):
+        """Wrap an already-loaded PGM image and its map_server metadata."""
         self.image = image
         self.resolution = resolution
         self.origin_x = origin_x
@@ -118,14 +157,17 @@ class SavedMap:
 
     @property
     def height(self):
+        """Image height in pixels."""
         return self.image.shape[0]
 
     @property
     def width(self):
+        """Image width in pixels."""
         return self.image.shape[1]
 
     @classmethod
     def load(cls, yaml_path=DEFAULT_MAP_FILE):
+        """Load a map previously written by RoomMap.save."""
         yaml_path = os.path.expanduser(yaml_path)
         with open(yaml_path) as f:
             info = yaml.safe_load(f)
@@ -139,16 +181,23 @@ class SavedMap:
         return cls(image, float(info["resolution"]), float(origin[0]), float(origin[1]))
 
     def pixel_to_world(self, col, row):
+        """Convert a pixel (col, row), row 0 at the top, to world (x, y)."""
         x = self.origin_x + col * self.resolution
         y = self.origin_y + (self.height - row) * self.resolution
         return x, y
 
     def world_to_pixel(self, x, y):
+        """Convert world (x, y) to a pixel (col, row), row 0 at the top."""
         col = (x - self.origin_x) / self.resolution
         row = self.height - (y - self.origin_y) / self.resolution
         return col, row
 
     def explored_bounds(self, margin_cells=30):
+        """
+        Return (col0, row0, col1, row1) around everything that isn't
+        unknown, padded by margin_cells -- the whole image if nothing has
+        been observed yet.
+        """
         known_rows, known_cols = np.nonzero(self.image != PIXEL_UNKNOWN)
         if len(known_rows) == 0:
             return 0, 0, self.width, self.height
@@ -160,6 +209,11 @@ class SavedMap:
         )
 
     def cell_state_at(self, x, y, radius=0.0):
+        """
+        Return "occupied", "unknown", or "free" for a circular footprint
+        of the given radius centered at world (x, y); "unknown" if any part
+        of that footprint falls off the map.
+        """
         col, row = self.world_to_pixel(x, y)
         col, row = int(round(col)), int(round(row))
         # a cell tighter than the planner's inflation, so waypoints on its edge still pass
@@ -179,6 +233,10 @@ class SavedMap:
 
 
 def _parse_pgm(raw):
+    """
+    Parse a binary (P5) PGM file's bytes into a uint8 height x width
+    array. Only what SavedMap.load needs -- no P2/ASCII support.
+    """
     tokens = []
     pos = 0
     while len(tokens) < 4:

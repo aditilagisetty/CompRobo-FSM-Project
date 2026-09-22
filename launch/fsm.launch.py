@@ -1,3 +1,10 @@
+"""
+Bring up the gateway FSM and every behavior node that feeds it: fsm_node,
+wall_follower, collision_avoidance, path_following, teleop_scan, and
+drive_square. Include this against an already-running world, or use
+bringup.launch.py to also start Gazebo first.
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -8,7 +15,8 @@ PACKAGE = "ros_behaviors_fsm"
 
 
 def generate_launch_description():
-    """Generate a launch description for the FSM node and its dependencies.
+    """
+    Generate a launch description for the FSM node and its dependencies.
 
     fsm_node and teleop_scan both read raw key presses straight from stdin,
     and ros2 launch doesn't give more than one node under the same launch

@@ -1,3 +1,9 @@
+"""
+Draw a route on the saved map, or right-click a goal for A* to plan one,
+and follow it with pure pursuit. Also hosts the always-visible FSM control
+panel (mode buttons, live status, arrow-key driving) this app opens with.
+"""
+
 import math
 import queue
 import sys
@@ -28,10 +34,16 @@ FRONT_CONE = math.radians(20)
 
 
 def wrap_angle(angle):
+    """Wrap an angle to (-pi, pi]."""
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
 def resample_path(points, spacing):
+    """
+    Return points spaced `spacing` apart along the polyline through
+    points, first and last kept, so a hand-drawn stroke's uneven sampling
+    doesn't affect the follower.
+    """
     if len(points) < 2:
         return list(points)
     pts = np.asarray(points, dtype=float)
@@ -47,6 +59,10 @@ def resample_path(points, spacing):
 
 
 def smooth_path(points, passes=2):
+    """
+    Average each interior point with its neighbors, a few passes, to
+    take the wobble out of a hand-drawn stroke; endpoints are left alone.
+    """
     pts = np.asarray(points, dtype=float)
     for _ in range(passes):
         if len(pts) < 3:
@@ -56,7 +72,18 @@ def smooth_path(points, passes=2):
 
 
 class PathFollower(Node):
+    """
+    Follows a waypoint list with pure pursuit, pausing for a bump, an
+    e-stop, or anything close ahead, and reports its status and pose for
+    the drawing window and the gateway FSM to watch.
+    """
+
     def __init__(self, ui_queue: Queue):
+        """
+        Declare the follower's tuning parameters and wire up its
+        cmd_vel/status/path publishers and its odom/scan/bump/estop/
+        current_mode subscriptions.
+        """
         super().__init__("path_following")
         self.declare_parameter("map_file", DEFAULT_MAP_FILE)
         self.declare_parameter("linear_speed", 0.15)
@@ -124,18 +151,24 @@ class PathFollower(Node):
         self.create_timer(0.1, self.publish_status)
 
     def mode_callback(self, msg):
+        """
+        Track the gateway FSM's current mode, log it, and tell the
+        control panel to show or hide the drawing window accordingly.
+        """
         self.current_mode = msg.data
         self.mode_history.append((datetime.now().strftime("%H:%M:%S"), msg.data))
         self.ui_queue.put("SHOW_UI" if msg.data == "PATH FOLLOWING" else "HIDE_UI")
 
     def send_fsm_command(self, key):
-        """Same t/m/g/p switches fsm_node's own keyboard listener sends,
+        """
+        Same t/m/g/p switches fsm_node's own keyboard listener sends,
         published from this long-lived node instead of a one-shot CLI pub.
         """
         self.fsm_command_pub.publish(String(data=key))
 
     def drive_teleop(self, linear, angular):
-        """Drives teleop_scan.py's robot -- only takes effect while fsm_node
+        """
+        Drives teleop_scan.py's robot -- only takes effect while fsm_node
         is in TELEOP SCAN mode, same as pressing wasd in its own terminal.
         """
         msg = Twist()
@@ -144,12 +177,14 @@ class PathFollower(Node):
         self.teleop_vel_pub.publish(msg)
 
     def save_teleop_map(self):
-        """Tells teleop_scan.py to save its map now (same as pressing m in
+        """
+        Tells teleop_scan.py to save its map now (same as pressing m in
         its own terminal); works even if that process has no real terminal.
         """
         self.save_map_pub.publish(Empty())
 
     def process_odom(self, msg):
+        """Track the robot's current pose from odometry."""
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
@@ -157,6 +192,10 @@ class PathFollower(Node):
         self.have_odom = True
 
     def process_scan(self, msg):
+        """
+        Flag whether anything is within stop_distance in the front
+        cone, for control_loop to pause on.
+        """
         ranges = np.asarray(msg.ranges, dtype=float)
         # ranges[0] is the front and beams go counterclockwise
         angles = np.arange(len(ranges)) * msg.angle_increment
@@ -167,11 +206,20 @@ class PathFollower(Node):
         self.obstacle_close = bool(len(r) and r.min() < self.stop_distance)
 
     def process_bump(self, msg):
+        """
+        Set self.bumped True on any real bump message; check_bump_timeout
+        is what clears it, since the simulator never sends an explicit
+        "bump cleared" message.
+        """
         if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
             self.last_bump_time = time.monotonic()
             self.bumped = True
 
     def check_bump_timeout(self):
+        """
+        Clear self.bumped once bump_timeout_sec has passed with no new
+        bump message.
+        """
         if (
             self.bumped
             and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
@@ -179,9 +227,14 @@ class PathFollower(Node):
             self.bumped = False
 
     def handle_estop(self, msg):
+        """Track the manual e-stop topic's current value."""
         self.manual_estop = bool(msg.data)
 
     def follow(self, waypoints):
+        """
+        Start following the given (x, y) waypoint list from its start,
+        and publish it for RViz.
+        """
         with self.lock:
             self.path = list(waypoints)
             self.idx = 0
@@ -190,12 +243,14 @@ class PathFollower(Node):
         self.get_logger().info(f"following a path of {len(waypoints)} waypoints")
 
     def cancel(self):
+        """Stop following, clear the path, and command zero velocity."""
         with self.lock:
             self.state = "idle"
             self.path = []
         self.drive(0.0, 0.0)
 
     def publish_path(self, waypoints):
+        """Publish the waypoint list as a Path message, for RViz."""
         msg = Path()
         msg.header.frame_id = "odom"
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -209,12 +264,17 @@ class PathFollower(Node):
         self.path_pub.publish(msg)
 
     def drive(self, linear, angular):
+        """Publish a Twist with the given linear and angular velocity."""
         msg = Twist()
         msg.linear.x = float(linear)
         msg.angular.z = float(angular)
         self.vel_pub.publish(msg)
 
     def status_text(self):
+        """
+        A short human-readable summary of the current following state,
+        for the drawing window's status line.
+        """
         with self.lock:
             state, idx, total = self.state, self.idx, len(self.path)
         if state == "following":
@@ -229,11 +289,19 @@ class PathFollower(Node):
         return state
 
     def publish_status(self):
+        """
+        Publish the current following state (idle/following/paused/done)
+        on path_following_status.
+        """
         with self.lock:
             state = self.state
         self.status_pub.publish(String(data=state))
 
     def control_loop(self):
+        """
+        Pause for a bump, e-stop, or close obstacle; resume and steer
+        otherwise; mark done once the path is finished.
+        """
         self.check_bump_timeout()
         with self.lock:
             if self.state not in ("following", "paused") or not self.have_odom:
@@ -255,9 +323,16 @@ class PathFollower(Node):
         self.drive(linear, angular)
 
     def steer(self):
+        """
+        Pure pursuit: advance to the nearest upcoming waypoint, aim at
+        the point lookahead meters further along, turn in place for a large
+        heading error, and slow down near the goal.
+        Return (linear, angular, finished).
+        """
         path = self.path
 
         def dist(i):
+            """Distance from the robot's current position to path[i]."""
             return math.hypot(path[i][0] - self.x, path[i][1] - self.y)
 
         last = len(path) - 1
@@ -287,6 +362,8 @@ class PathFollower(Node):
 
 class PathPainter:
     """
+    
+
     GUI for drawing a path on a map and sending it to the PathFollower node.
     The user can draw strokes on the map, set a goal point, and plan a path using A* algorithm.
     The GUI also allows the user to clear the strokes, undo the last stroke, and reload the map.
@@ -297,6 +374,10 @@ class PathPainter:
     REFRESH_MS = 100
 
     def __init__(self, node, master):
+        """
+        Build the drawing window (as a Toplevel under master) and its
+        buttons, load the current map, and start out hidden.
+        """
         self.node = node
         self.map = None
         self.strokes = []
@@ -344,6 +425,10 @@ class PathPainter:
         self.root.withdraw()  # hidden until fsm_node actually enters PATH FOLLOWING
 
     def reload_map(self):
+        """
+        Load (or reload) the map file from disk and redraw the canvas,
+        clearing any in-progress drawing.
+        """
         try:
             self.map = SavedMap.load(self.node.map_file)
         except (OSError, KeyError, ValueError) as err:
@@ -370,15 +455,18 @@ class PathPainter:
         )
 
     def canvas_to_world(self, cx, cy):
+        """Convert a canvas pixel (cx, cy) to world (x, y) meters."""
         col = self.crop[0] + cx / self.zoom
         row = self.crop[1] + cy / self.zoom
         return self.map.pixel_to_world(col, row)
 
     def world_to_canvas(self, x, y):
+        """Convert world (x, y) meters to a canvas pixel (cx, cy)."""
         col, row = self.map.world_to_pixel(x, y)
         return (col - self.crop[0]) * self.zoom, (row - self.crop[1]) * self.zoom
 
     def on_press(self, event):
+        """Start a new stroke at the click point."""
         if self.map is None:
             return
         self.strokes.append([(event.x, event.y)])
@@ -386,6 +474,7 @@ class PathPainter:
         self.bad_points = []
 
     def on_drag(self, event):
+        """Extend the current stroke and draw the new segment."""
         if self.map is None or not self.strokes:
             return
         stroke = self.strokes[-1]
@@ -405,6 +494,7 @@ class PathPainter:
         )
 
     def undo(self):
+        """Remove the last drawn stroke."""
         if self.strokes:
             self.strokes.pop()
         self.waypoints = []
@@ -412,6 +502,7 @@ class PathPainter:
         self.redraw()
 
     def clear(self):
+        """Remove every drawn stroke and the goal marker."""
         self.strokes = []
         self.waypoints = []
         self.bad_points = []
@@ -419,6 +510,7 @@ class PathPainter:
         self.redraw()
 
     def on_click_goal(self, event):
+        """Set the A* goal to the right-clicked point."""
         if self.map is None:
             return
         self.goal_click = self.canvas_to_world(event.x, event.y)
@@ -429,6 +521,10 @@ class PathPainter:
         )
 
     def redraw(self):
+        """
+        Repaint the map, every drawn stroke, the planned waypoints (and
+        any flagged as too close to an obstacle), and the goal marker.
+        """
         if self.map is None:
             return
         self.canvas.delete("all")
@@ -471,12 +567,18 @@ class PathPainter:
             )
 
     def plan(self):
+        """
+        Turn the drawn strokes into a smoothed, evenly-spaced world-frame
+        waypoint list.
+        """
         joined = [p for stroke in self.strokes for p in stroke]
         world = [self.canvas_to_world(cx, cy) for cx, cy in joined]
         return smooth_path(resample_path(world, self.node.waypoint_spacing))
 
     def _follow_if_valid(self, waypoints, label):
-        """checks waypoints against the map for wall or obstacles and
+        """
+        checks waypoints against the map for wall or obstacles and.
+
         updates self.waypoints and self.bad_points and redraws either way
         starts following if the whole path is clear.
 
@@ -501,6 +603,10 @@ class PathPainter:
         return True
 
     def go(self):
+        """
+        Follow the drawn path, or if it crosses an obstacle, fall back to
+        an A*-planned route to the same destination.
+        """
         if self.map is None:
             return
         waypoints = self.plan()
@@ -546,6 +652,10 @@ class PathPainter:
             )
 
     def plan_astar(self):
+        """
+        Plan and follow an A* route from the robot's current position to
+        the right-clicked goal.
+        """
         if self.map is None:
             return
         if self.goal_click is None:
@@ -573,13 +683,19 @@ class PathPainter:
             )
 
     def stop(self):
+        """Cancel following, without leaving PATH FOLLOWING mode."""
         self.node.cancel()
         self.set_message("Stopped.")
 
     def set_message(self, text):
+        """Set the window's bottom status message."""
         self.message.config(text=text)
 
     def tick(self):
+        """
+        Refresh the status line and redraw the robot marker at its
+        current pose; reschedules itself.
+        """
         self.status.config(
             text=f"{self.node.status_text()}   "
             f"robot=({self.node.x:.2f}, {self.node.y:.2f})"
@@ -607,13 +723,16 @@ class PathPainter:
             return False
 
     def show(self):
+        """Reveal the drawing window."""
         self.root.deiconify()
 
     def hide(self):
+        """Hide the drawing window without destroying it."""
         self.root.withdraw()
 
     def close(self):
-        """The window's own [X] button: cancel the path and tell fsm_node
+        """
+        The window's own [X] button: cancel the path and tell fsm_node
         to leave PATH FOLLOWING, same as switching modes any other way.
         """
         self.node.cancel()
@@ -622,7 +741,9 @@ class PathPainter:
 
 
 class ControlPanel:
-    """Always-visible window: buttons to switch fsm_node's mode (the same
+    """
+    Always-visible window: buttons to switch fsm_node's mode (the same.
+
     t/m/g/p switches its own keyboard listener and /fsm_command accept), a
     live current_mode line, and a scrolling log of past mode changes. Owns
     the one persistent Tk root for this process; the path-drawing window
@@ -653,6 +774,11 @@ class ControlPanel:
     }
 
     def __init__(self, node, ui_queue):
+        """
+        Build the mode buttons, status line, drive area, and mode-history
+        log, and create the (initially hidden) drawing window under this
+        panel's root.
+        """
         self.node = node
         self.ui_queue = ui_queue
         self.held_keys = set()
@@ -716,15 +842,21 @@ class ControlPanel:
         self.root.after(self.DRIVE_MS, self.drive_tick)
 
     def on_drive_press(self, key):
+        """
+        Record an arrow key as held, switching to TELEOP SCAN first if
+        this is the first key pressed while in some other mode.
+        """
         if not self.held_keys and self.node.current_mode != "TELEOP SCAN":
             self.node.send_fsm_command("t")
         self.held_keys.add(key)
 
     def on_drive_release(self, key):
+        """Stop treating an arrow key as held."""
         self.held_keys.discard(key)
 
     def drive_tick(self):
-        """Composes the currently-held arrow keys into one Twist and
+        """
+        Composes the currently-held arrow keys into one Twist and
         publishes it, the same way teleop_scan.py's own 0.1s timer keeps
         re-sending whatever the last keypress set -- so releasing every key
         stops the robot instead of leaving a stale command in flight.
@@ -742,12 +874,21 @@ class ControlPanel:
         self.root.after(self.DRIVE_MS, self.drive_tick)
 
     def save_map(self):
+        """
+        Tell teleop_scan to save its map now, and show a confirmation
+        that clears itself after a few seconds.
+        """
         self.node.save_teleop_map()
         # a separate label from drive_status, which drive_tick overwrites every 100ms
         self.save_status.config(text=f"saved {datetime.now().strftime('%H:%M:%S')}")
         self.root.after(3000, lambda: self.save_status.config(text=""))
 
     def tick(self):
+        """
+        Refresh the status line, append any new mode-history entries to
+        the log, and show/hide the drawing window on a pending mode change;
+        reschedules itself.
+        """
         self.status.config(text=f"mode: {self.node.current_mode}")
 
         history = self.node.mode_history
@@ -768,15 +909,24 @@ class ControlPanel:
         self.root.after(self.REFRESH_MS, self.tick)
 
     def on_close(self):
+        """
+        The panel's own [X] button: cancel any path in progress, switch
+        back to wall following, and exit the Tk main loop.
+        """
         self.node.cancel()
         self.node.send_fsm_command("g")
         self.root.quit()
 
     def run(self):
+        """Run the Tk main loop until the panel is closed."""
         self.root.mainloop()
 
 
 def main(args=None):
+    """
+    Initialize rclpy, run the control panel until it's closed, then shut
+    down. Exits with an error if no saved map can be loaded.
+    """
     # let Ctrl-C raise here so the robot still gets a zero velocity before rclpy shuts down
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
 

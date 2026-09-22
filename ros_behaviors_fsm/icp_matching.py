@@ -1,3 +1,9 @@
+"""
+2D point-to-point ICP: aligns a laser scan against a saved map's occupied
+cells to correct odometry drift. icp_align is the entry point icp_localizer.py
+calls each scan; the rest are its building blocks.
+"""
+
 import math
 
 import numpy as np
@@ -6,10 +12,12 @@ from .room_map import PIXEL_OCCUPIED
 
 
 def wrap_angle(angle):
+    """Wrap an angle to (-pi, pi]."""
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
 def compose(a, b):
+    """Compose two (x, y, yaw) poses: apply pose b in pose a's frame."""
     ax, ay, at = a
     bx, by, bt = b
     c, s = math.cos(at), math.sin(at)
@@ -17,12 +25,14 @@ def compose(a, b):
 
 
 def inverse(pose):
+    """Return the (x, y, yaw) pose that undoes the given one."""
     x, y, t = pose
     c, s = math.cos(t), math.sin(t)
     return -(c * x + s * y), s * x - c * y, wrap_angle(-t)
 
 
 def transform_points(points, pose):
+    """Rotate and translate an (N, 2) point array by a (x, y, yaw) pose."""
     x, y, t = pose
     c, s = math.cos(t), math.sin(t)
     rotation = np.array([[c, -s], [s, c]])
@@ -30,6 +40,10 @@ def transform_points(points, pose):
 
 
 def scan_to_points(ranges, angle_increment, range_min, range_max, lidar_offset_x=0.0):
+    """
+    Convert a LaserScan's ranges into an (N, 2) array of valid hit points
+    in the robot frame (ranges[0] straight ahead, ccw from there).
+    """
     ranges = np.asarray(ranges, dtype=float)
     angles = np.arange(len(ranges)) * angle_increment
     valid = np.isfinite(ranges) & (ranges >= range_min) & (ranges < range_max)
@@ -38,15 +52,29 @@ def scan_to_points(ranges, angle_increment, range_min, range_max, lidar_offset_x
 
 
 class MapPoints:
+    """
+    A saved map's occupied cells as world-frame points, with a nearest-
+    neighbor lookup for ICP correspondences.
+    """
+
     def __init__(self, saved_map):
+        """
+        Collect every occupied pixel's world-frame center once, up front,
+        so nearest() doesn't have to rescan the image each call.
+        """
         rows, cols = np.nonzero(saved_map.image == PIXEL_OCCUPIED)
         xs, ys = saved_map.pixel_to_world(cols + 0.5, rows + 0.5)
         self.points = np.column_stack([xs, ys])
 
     def __len__(self):
+        """Number of occupied map points."""
         return len(self.points)
 
     def nearest(self, points):
+        """
+        For each row in points, return (nearest map point, distance to
+        it), by brute-force distance to every occupied cell.
+        """
         d2 = (
             (points**2).sum(1)[:, None]
             + (self.points**2).sum(1)[None, :]
@@ -58,7 +86,8 @@ class MapPoints:
 
 
 def find_correspondences(scan_points, map_points, max_distance):
-    """scan_points: (N, 2) already in the map frame.
+    """
+    scan_points: (N, 2) already in the map frame
     Pair every scan point with its nearest occupied map point
     (map_points.nearest) and drop pairs you don't trust.
     Return (scan_pts, map_pts), both (K, 2), row i of one matching row i of the other.
@@ -69,7 +98,8 @@ def find_correspondences(scan_points, map_points, max_distance):
 
 
 def best_rigid_transform(source, target):
-    """(K, 2) point sets with row i of source matching row i of target.
+    """
+    (K, 2) point sets with row i of source matching row i of target
     Return (dx, dy, dyaw) minimizing sum |R(dyaw) @ s_i + (dx, dy) - t_i|^2.
     """
     source_center = source.mean(axis=0)
@@ -86,7 +116,8 @@ def best_rigid_transform(source, target):
 
 
 def icp_align(scan_points, map_points, guess, max_iterations=20, max_distance=0.5):
-    """scan_points: (N, 2) in the robot frame. guess: (x, y, yaw) of the robot in the map.
+    """
+    scan_points: (N, 2) in the robot frame. guess: (x, y, yaw) of the robot in the map
     Return (pose, inlier_fraction, rms_error): the refined (x, y, yaw), the fraction
     of scan points that ended up with a trusted match, and the rms distance of those
     matches in meters. Return None if it cannot produce an estimate.

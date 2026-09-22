@@ -1,4 +1,6 @@
-"""Starts the whole app with one command: the Gazebo gauntlet world, then
+"""
+Starts the whole app with one command: the Gazebo gauntlet world, then.
+
 every node in fsm.launch.py (fsm_node, wall_follower, collision_avoidance,
 path_following, teleop_scan, drive_square).
 
@@ -37,6 +39,10 @@ WORLD_FILES = {
 
 
 def generate_launch_description():
+    """
+    Declare the world/keyboard-node launch arguments, then include the
+    chosen neato2_gazebo world and fsm.launch.py's app nodes.
+    """
     world_arg = DeclareLaunchArgument(
         'world', default_value='gauntlet',
         description='Which neato2_gazebo world to launch: ' + ', '.join(WORLD_FILES))
@@ -59,6 +65,10 @@ def generate_launch_description():
     from launch.actions import OpaqueFunction
 
     def include_world(context, *args, **kwargs):
+        """
+        Resolve the world launch argument at launch time and include the
+        matching neato2_gazebo world file.
+        """
         world = LaunchConfiguration('world').perform(context)
         launch_file = WORLD_FILES.get(world, WORLD_FILES['gauntlet'])
         return [IncludeLaunchDescription(

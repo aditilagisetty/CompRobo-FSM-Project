@@ -1,8 +1,16 @@
+"""
+Quaternion-to-Euler-angle conversion, shared by the nodes that track.
+
+odometry orientation.
+"""
+
 import math
 
 
 def euler_from_quaternion(x, y, z, w):
     """
+    
+
     Convert a quaternion into euler angles (roll, pitch, yaw)
     roll is rotation around x in radians (counterclockwise)
     pitch is rotation around y in radians (counterclockwise)

@@ -1,3 +1,8 @@
+"""
+Follow a wall on whichever side is closer, turning away from anything
+straight ahead and publishing an RViz marker at the detected wall point.
+"""
+
 import math
 import rclpy
 from rclpy.node import Node
@@ -8,6 +13,8 @@ from visualization_msgs.msg import Marker
 
 class WallFollower(Node):
     """
+    
+
     Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision.
     """
 
@@ -35,6 +42,8 @@ class WallFollower(Node):
 
     def process_scan(self, msg):
         """
+        
+
         Processes the incoming LaserScan message to determine the robot's behavior.
         """
         # Initial values declared
@@ -112,7 +121,7 @@ class WallFollower(Node):
         self.vel_pub.publish(vel)
 
     def publish_wall_marker(self, distance, angle_deg):
-        """Visualizes the detected wall point as an arrow from the robot's origin"""
+        """Visualizes the detected wall point as an arrow from the robot's origin."""
         angle_rad = math.radians(angle_deg)
         x = distance * math.cos(angle_rad)
         y = distance * math.sin(angle_rad)

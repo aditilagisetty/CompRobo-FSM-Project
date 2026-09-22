@@ -1,4 +1,6 @@
 """
+
+
 Collision Avoidance:
 Combines what used to be two separate behaviors:
 - Reactive stopping (bump-triggered / very-close-range triggered)
@@ -19,7 +21,16 @@ from visualization_msgs.msg import Marker
 
 
 class CollisionAvoidance(Node):
+    """
+    Steer around obstacles with a potential field, and hard-stop for
+    anything (or a bump) that's already too close for steering to help.
+    """
+
     def __init__(self):
+        """
+        Set up the bump/scan subscriptions, the cmd_vel and RViz-marker
+        publishers, and the hard-stop/potential-field tuning constants.
+        """
         super().__init__("collision_avoidance")
         self.create_subscription(Bump, "bump", self.process_bump, 10)
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)
@@ -59,11 +70,14 @@ class CollisionAvoidance(Node):
     # lidar is mounted rotated 180 degrees, so ray 0 is the front - checked on
     # the recorded bags
     def _range_at_angle(self, msg, degrees):
-        """Looks up the scan range closest to the degrees from the
+        """
+        Looks up the scan range closest to the degrees from the.
+
         robots forward direction where 0 is straight ahead, 90 is
         facing left, and -90 is right
 
-        Returns range, returns inf for missing readings."""
+        Returns range, returns inf for missing readings.
+        """
 
         angle_rad = math.radians(degrees)
         # back calculate to find range index
@@ -77,7 +91,8 @@ class CollisionAvoidance(Node):
 
     # do the _range_at_angle function for a large spread of angles
     def _min_range_in_cone(self, msg, center_deg, half_width_deg):
-        """Smallest valid range within plus or minus half_width_deg of
+        """
+        Smallest valid range within plus or minus half_width_deg of
         center_deg such that a dropped reading cant hide an obstacle.
         """
         readings = [
@@ -87,11 +102,20 @@ class CollisionAvoidance(Node):
         return min(readings)
 
     def process_bump(self, msg):
+        """
+        Set self.bumped True on any real bump message; check_bump_timeout
+        is what clears it, since the simulator never sends an explicit
+        "bump cleared" message.
+        """
         if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
             self.last_bump_time = time.monotonic()
             self.bumped = True
 
     def check_bump_timeout(self):
+        """
+        Clear self.bumped once bump_timeout_sec has passed with no new
+        bump message.
+        """
         if (
             self.bumped
             and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
@@ -100,6 +124,10 @@ class CollisionAvoidance(Node):
 
     # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
+        """
+        Hard-stop if bumped or something is too close (with hysteresis
+        on the release distance); otherwise steer with the potential field.
+        """
         self.check_bump_timeout()
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
         self.side_range = self._min_range_in_cone(
@@ -147,7 +175,9 @@ class CollisionAvoidance(Node):
         self.publish_force_marker(net_x, net_y)
 
     def compute_potential_field(self, msg):
-        """Returns the net (x, y) force in the robot's frame: a constant
+        """
+        Returns the net (x, y) force in the robot's frame: a constant.
+
         forward attractive pull plus a repulsive contribution from every
         scan reading within self.influence_radius.
 
@@ -171,7 +201,8 @@ class CollisionAvoidance(Node):
         return net_x, net_y
 
     def publish_force_marker(self, x, y):
-        """Visualizes the net force vector as an arrow from the robot's
+        """
+        Visualizes the net force vector as an arrow from the robot's
         origin, in RViz.
         """
         marker = Marker()
@@ -188,6 +219,7 @@ class CollisionAvoidance(Node):
 
 
 def main(args=None):
+    """Initialize rclpy, spin the node until interrupted, then shut down."""
     rclpy.init(args=args)
     node = CollisionAvoidance()
     rclpy.spin(node)

@@ -1,3 +1,10 @@
+"""
+Gateway finite state machine: forwards whichever behavior node's cmd_vel_*
+topic matches the current mode to cmd_vel, and switches modes automatically
+(wall following <-> obstacle avoidance) or on command (keyboard, or the
+fsm_command topic for when stdin isn't a real terminal).
+"""
+
 import math
 import select
 import sys
@@ -15,9 +22,17 @@ from std_msgs.msg import String
 
 class FSMNode(Node):
     """
-    Finite State Machine (FSM) Node for Robot Control"""
+    
+
+    Finite State Machine (FSM) Node for Robot Control
+    """
 
     def __init__(self):
+        """
+        Wire up the cmd_vel_* subscriptions, the mode-switch inputs
+        (keyboard and fsm_command), and the wall-follow/obstacle-avoidance
+        auto-switch state.
+        """
         super().__init__("fsm_node")
 
         self.state = "WALL FOLLOW"  # Initial state
@@ -76,7 +91,8 @@ class FSMNode(Node):
         self.key_thread.start()
 
     def process_bump(self, msg):
-        """sets self.bumped True on any real bump message.
+        """
+        sets self.bumped True on any real bump message
         Clearing it is check_bump_timeout()'s job instead.
         """
         if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
@@ -93,13 +109,16 @@ class FSMNode(Node):
 
     def set_state(self, new_state):
         """
+        
+
         Sets the current state of the FSM and publishes it to the "current_mode" topic.
         """
         self.state = new_state
         self.mode_pub.publish(String(data=new_state))
 
     def handle_key(self, key):
-        """The t/m/g/p switch logic, shared by the keyboard listener and
+        """
+        The t/m/g/p switch logic, shared by the keyboard listener and
         process_fsm_command so the two input paths can't drift apart.
         """
         key = key.lower()
@@ -116,7 +135,8 @@ class FSMNode(Node):
             self.set_state("PATH FOLLOWING")
 
     def process_fsm_command(self, msg):
-        """Same switches as keyboard_listener, delivered over the
+        """
+        Same switches as keyboard_listener, delivered over the
         fsm_command topic instead of raw stdin -- this is the one that
         still works under ros2 launch.
         """
@@ -141,37 +161,48 @@ class FSMNode(Node):
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
     def wall_follower(self, msg):
-        """Publishes velocity commands from the wall follower
-        node if the FSM is in the "WALL FOLLOW" state."""
+        """
+        Publishes velocity commands from the wall follower
+        node if the FSM is in the "WALL FOLLOW" state.
+        """
         if self.state == "WALL FOLLOW":
             self.vel_pub.publish(msg)
 
     def drive_square(self, msg):
-        """Publishes velocity commands from the drive square node
-        if the FSM is in the "DRIVE SQUARE" state."""
+        """
+        Publishes velocity commands from the drive square node
+        if the FSM is in the "DRIVE SQUARE" state.
+        """
         if self.state == "DRIVE SQUARE":
             self.vel_pub.publish(msg)
 
     def obstacle_avoidance(self, msg):
-        """Publishes velocity commands from the obstacle avoidance node
-        if the FSM is in the "OBSTACLE AVOIDANCE" state."""
+        """
+        Publishes velocity commands from the obstacle avoidance node
+        if the FSM is in the "OBSTACLE AVOIDANCE" state.
+        """
         if self.state == "OBSTACLE AVOIDANCE":
             self.vel_pub.publish(msg)
 
     def path_following(self, msg):
-        """Publishes velocity commands from the path following node if
-        the FSM is in the "PATH FOLLOWING" state."""
+        """
+        Publishes velocity commands from the path following node if
+        the FSM is in the "PATH FOLLOWING" state.
+        """
         if self.state == "PATH FOLLOWING":
             self.vel_pub.publish(msg)
 
     def teleop_scan(self, msg):
-        """Publishes velocity commands from the teleop scan
-        node if the FSM is in the "TELEOP SCAN" state."""
+        """
+        Publishes velocity commands from the teleop scan
+        node if the FSM is in the "TELEOP SCAN" state.
+        """
         if self.state == "TELEOP SCAN":
             self.vel_pub.publish(msg)
 
     def run_loop(self, msg):
-        """Main loop that checks the LaserScan data to determine
+        """
+        Main loop that checks the LaserScan data to determine
         if the robot should switch between "WALL FOLLOW" and "OBSTACLE AVOIDANCE" states.
         """
         if self.state == "TELEOP SCAN":
