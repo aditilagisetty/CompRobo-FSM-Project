@@ -1,31 +1,35 @@
 """
-Follow a wall on whichever side is closer, turning away from anything
-straight ahead and publishing an RViz marker at the detected wall point.
+Follow the closer wall, steering away from anything straight ahead.
+
+Publish an RViz marker at the point on the wall the robot is using to
+steer.
 """
 
 import math
+
+from geometry_msgs.msg import Point, Twist
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Point, Twist
 from visualization_msgs.msg import Marker
 
 
 class WallFollower(Node):
     """
-    
+    Follow a wall using laser scan data.
 
-    Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision.
+    The robot follows whichever wall (left or right) is closer, and
+    turns away from anything detected straight ahead to avoid a collision.
     """
 
     def __init__(self):
-        """Node that implements a simple wall-following behavior using laser scan data. The robot will follow the wall on its left or right side, depending on which wall is closer. If an obstacle is detected in front of the robot, it will turn away from the wall to avoid collision."""
-        super().__init__("wall_follower")
-        self.create_subscription(LaserScan, "scan", self.process_scan, 10)
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel_wall_follower", 10)
+        """Initialize speed, gains, and state used while following a wall."""
+        super().__init__('wall_follower')
+        self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
+        self.vel_pub = self.create_publisher(Twist, 'cmd_vel_wall_follower', 10)
         # as an arrow in RViz, the same way collision_avoidance.py
         # visualizes its net force on collision_avoidance_force.
-        self.marker_pub = self.create_publisher(Marker, "wall_detection_marker", 10)
+        self.marker_pub = self.create_publisher(Marker, 'wall_detection_marker', 10)
         self.forward_speed = 0.1
         self.distance_from_wall = 1.0
         self.kp = 0.5
@@ -41,11 +45,7 @@ class WallFollower(Node):
         self.has_teleop_run = False  # Flag to check if teleop has run before
 
     def process_scan(self, msg):
-        """
-        
-
-        Processes the incoming LaserScan message to determine the robot's behavior.
-        """
+        """Pick a wall to follow from the scan and publish the next velocity."""
         # Initial values declared
         vel = Twist()
         now = self.get_clock().now().nanoseconds / 1e9
@@ -68,11 +68,11 @@ class WallFollower(Node):
 
         decided_angles = []
 
-        # This checks what wall is close to the neato and sets the follow side accordingly. If both walls are close, it will follow the left wall.
         r90_valid = math.isfinite(r90) and r90 > 0.0
         r270_valid = math.isfinite(r270) and r270 > 0.0
 
-        # This checks what wall is close to the neato and sets the follow side accordingly. If both walls are close, it will follow the left wall.
+        # Follow whichever wall is closer; if both are equally close, follow
+        # the left wall.
         if r90_valid and r270_valid:
             if r90 <= r270:
                 self.follow_side = 1  # Left side is closer
@@ -115,7 +115,7 @@ class WallFollower(Node):
 
         # DEbug print statements
         print(f"Side: {'LEFT' if self.follow_side == 1 else 'RIGHT'}")
-        print(f"Angular Z: {vel.angular.z}")
+        print(f'Angular Z: {vel.angular.z}')
 
         self.publish_wall_marker(decided_angles[1], 90 * self.follow_side)
         self.vel_pub.publish(vel)
@@ -126,7 +126,7 @@ class WallFollower(Node):
         x = distance * math.cos(angle_rad)
         y = distance * math.sin(angle_rad)
         marker = Marker()
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = 'base_link'
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
@@ -139,12 +139,12 @@ class WallFollower(Node):
 
 
 def main(args=None):
-    """Main function to initialize the ROS2 node and start spinning it. This function sets up the WallFollower node and keeps it running until the program is terminated."""
+    """Initialize rclpy, spin the WallFollower node, then shut down."""
     rclpy.init(args=args)
     node = WallFollower()
     rclpy.spin(node)
     rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

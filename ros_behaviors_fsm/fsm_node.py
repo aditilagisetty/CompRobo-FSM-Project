@@ -1,7 +1,9 @@
 """
-Gateway finite state machine: forwards whichever behavior node's cmd_vel_*
-topic matches the current mode to cmd_vel, and switches modes automatically
-(wall following <-> obstacle avoidance) or on command (keyboard, or the
+Route whichever behavior node currently owns cmd_vel, and switch modes.
+
+Forwards whichever behavior node's cmd_vel_* topic matches the
+current mode to cmd_vel, and switches modes automatically (wall
+following <-> obstacle avoidance) or on command (keyboard, or the
 fsm_command topic for when stdin isn't a real terminal).
 """
 
@@ -12,60 +14,58 @@ import termios
 import threading
 import time
 import tty
-import rclpy
+
 from geometry_msgs.msg import Twist
 from neato2_interfaces.msg import Bump
+import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
 
 class FSMNode(Node):
-    """
-    
-
-    Finite State Machine (FSM) Node for Robot Control
-    """
+    """Finite State Machine (FSM) node for robot control."""
 
     def __init__(self):
         """
-        Wire up the cmd_vel_* subscriptions, the mode-switch inputs
-        (keyboard and fsm_command), and the wall-follow/obstacle-avoidance
-        auto-switch state.
+        Wire up the cmd_vel_* subscriptions and mode-switch inputs.
+
+        Also wires up the wall-follow/obstacle-avoidance auto-switch
+        state, and the keyboard (or fsm_command) mode-switch inputs.
         """
-        super().__init__("fsm_node")
+        super().__init__('fsm_node')
 
-        self.state = "WALL FOLLOW"  # Initial state
+        self.state = 'WALL FOLLOW'  # Initial state
 
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
-        self.mode_pub = self.create_publisher(String, "current_mode", 10)
+        self.mode_pub = self.create_publisher(String, 'current_mode', 10)
 
         # Subscription for different nodes to send velocity commands
-        self.create_subscription(Twist, "cmd_vel_wall_follower", self.wall_follower, 10)
+        self.create_subscription(Twist, 'cmd_vel_wall_follower', self.wall_follower, 10)
         self.create_subscription(
-            Twist, "cmd_vel_collision_avoidance", self.obstacle_avoidance, 10
+            Twist, 'cmd_vel_collision_avoidance', self.obstacle_avoidance, 10
         )
-        self.create_subscription(Twist, "cmd_vel_teleop_scan", self.teleop_scan, 10)
+        self.create_subscription(Twist, 'cmd_vel_teleop_scan', self.teleop_scan, 10)
 
         self.create_subscription(
-            Twist, "cmd_vel_path_following", self.path_following, 10
+            Twist, 'cmd_vel_path_following', self.path_following, 10
         )
 
-        self.create_subscription(Twist, "cmd_vel_drive_square", self.drive_square, 10)
+        self.create_subscription(Twist, 'cmd_vel_drive_square', self.drive_square, 10)
 
         # Subscrption for LaserScan data
-        self.create_subscription(LaserScan, "scan", self.run_loop, 10)
+        self.create_subscription(LaserScan, 'scan', self.run_loop, 10)
 
         # Same t/m/g/p switches as the keyboard listener below, but over a
         # topic instead of raw stdin -- this works under ros2 launch (or any
         # other non-interactive process), where stdin isn't a real terminal
         # and the keyboard listener can't run at all, e.g.:
         #   ros2 topic pub -1 /fsm_command std_msgs/String "data: p"
-        self.create_subscription(String, "fsm_command", self.process_fsm_command, 10)
+        self.create_subscription(String, 'fsm_command', self.process_fsm_command, 10)
 
         # bump subscription
-        self.create_subscription(Bump, "bump", self.process_bump, 10)
+        self.create_subscription(Bump, 'bump', self.process_bump, 10)
         self.bumped = False
         self.bump_timeout_sec = 0.3
         self.last_bump_time = None
@@ -92,7 +92,8 @@ class FSMNode(Node):
 
     def process_bump(self, msg):
         """
-        sets self.bumped True on any real bump message
+        Set self.bumped True on any real bump message.
+
         Clearing it is check_bump_timeout()'s job instead.
         """
         if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
@@ -100,7 +101,7 @@ class FSMNode(Node):
             self.bumped = True
 
     def check_bump_timeout(self):
-        """Clears self.bumped once bump_timeout_sec has passed."""
+        """Clear self.bumped once bump_timeout_sec has passed."""
         if (
             self.bumped
             and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
@@ -108,46 +109,45 @@ class FSMNode(Node):
             self.bumped = False
 
     def set_state(self, new_state):
-        """
-        
-
-        Sets the current state of the FSM and publishes it to the "current_mode" topic.
-        """
+        """Set the current state of the FSM and publish it to current_mode."""
         self.state = new_state
         self.mode_pub.publish(String(data=new_state))
 
     def handle_key(self, key):
         """
-        The t/m/g/p switch logic, shared by the keyboard listener and
-        process_fsm_command so the two input paths can't drift apart.
+        Handle the t/m/g/p switch logic, shared by keyboard and command paths.
+
+        Shared by the keyboard listener and process_fsm_command so
+        the two input paths can't drift apart.
         """
         key = key.lower()
-        if key == "t":
-            self.set_state("TELEOP SCAN")
-        elif key == "m" and self.state == "TELEOP SCAN":
-            self.set_state("DRIVE SQUARE")
-        elif key == "g":
-            self.set_state("WALL FOLLOW")
-        elif key == "p":
+        if key == 't':
+            self.set_state('TELEOP SCAN')
+        elif key == 'm' and self.state == 'TELEOP SCAN':
+            self.set_state('DRIVE SQUARE')
+        elif key == 'g':
+            self.set_state('WALL FOLLOW')
+        elif key == 'p':
             # path_following.py checks for a real map file on disk itself
             # and refuses to start without one, so there's no need to
             # separately gate this switch on teleop having run this session
-            self.set_state("PATH FOLLOWING")
+            self.set_state('PATH FOLLOWING')
 
     def process_fsm_command(self, msg):
         """
-        Same switches as keyboard_listener, delivered over the
-        fsm_command topic instead of raw stdin -- this is the one that
-        still works under ros2 launch.
+        Apply the same t/m/g/p switches as keyboard_listener, via a topic.
+
+        Delivered over the fsm_command topic instead of raw stdin --
+        this is the one that still works under ros2 launch.
         """
         self.handle_key(msg.data.strip())
 
     def keyboard_listener(self):
-        """Listens for raw key presses in terminal without pressing Enter."""
+        """Listen for raw key presses in terminal without pressing Enter."""
         if not sys.stdin.isatty():
             self.get_logger().error(
-                "fsm_node keyboard control needs a real terminal (stdin is "
-                "not a tty) -- publish to /fsm_command instead, e.g. "
+                'fsm_node keyboard control needs a real terminal (stdin is '
+                'not a tty) -- publish to /fsm_command instead, e.g. '
                 'ros2 topic pub -1 /fsm_command std_msgs/String "data: p"'
             )
             return
@@ -162,50 +162,57 @@ class FSMNode(Node):
 
     def wall_follower(self, msg):
         """
-        Publishes velocity commands from the wall follower
-        node if the FSM is in the "WALL FOLLOW" state.
+        Publish velocity commands from the wall follower node.
+
+        If the FSM is in the "WALL FOLLOW" state.
         """
-        if self.state == "WALL FOLLOW":
+        if self.state == 'WALL FOLLOW':
             self.vel_pub.publish(msg)
 
     def drive_square(self, msg):
         """
-        Publishes velocity commands from the drive square node
-        if the FSM is in the "DRIVE SQUARE" state.
+        Publish velocity commands from the drive square node.
+
+        If the FSM is in the "DRIVE SQUARE" state.
         """
-        if self.state == "DRIVE SQUARE":
+        if self.state == 'DRIVE SQUARE':
             self.vel_pub.publish(msg)
 
     def obstacle_avoidance(self, msg):
         """
-        Publishes velocity commands from the obstacle avoidance node
-        if the FSM is in the "OBSTACLE AVOIDANCE" state.
+        Publish velocity commands from the obstacle avoidance node.
+
+        If the FSM is in the "OBSTACLE AVOIDANCE" state.
         """
-        if self.state == "OBSTACLE AVOIDANCE":
+        if self.state == 'OBSTACLE AVOIDANCE':
             self.vel_pub.publish(msg)
 
     def path_following(self, msg):
         """
-        Publishes velocity commands from the path following node if
-        the FSM is in the "PATH FOLLOWING" state.
+        Publish velocity commands from the path following node.
+
+        If the FSM is in the "PATH FOLLOWING" state.
         """
-        if self.state == "PATH FOLLOWING":
+        if self.state == 'PATH FOLLOWING':
             self.vel_pub.publish(msg)
 
     def teleop_scan(self, msg):
         """
-        Publishes velocity commands from the teleop scan
-        node if the FSM is in the "TELEOP SCAN" state.
+        Publish velocity commands from the teleop scan node.
+
+        If the FSM is in the "TELEOP SCAN" state.
         """
-        if self.state == "TELEOP SCAN":
+        if self.state == 'TELEOP SCAN':
             self.vel_pub.publish(msg)
 
     def run_loop(self, msg):
         """
-        Main loop that checks the LaserScan data to determine
-        if the robot should switch between "WALL FOLLOW" and "OBSTACLE AVOIDANCE" states.
+        Check the scan and switch between WALL FOLLOW and OBSTACLE AVOIDANCE.
+
+        Main loop that uses the LaserScan data to decide when the
+        robot should switch states.
         """
-        if self.state == "TELEOP SCAN":
+        if self.state == 'TELEOP SCAN':
             return  # Skip processing if in TELEOP SCAN mode
 
         self.check_bump_timeout()
@@ -213,7 +220,7 @@ class FSMNode(Node):
         # Check for obstacles in front of the robot
         front_cone = msg.ranges[:10] + msg.ranges[-10:]
         valid_ranges = [r for r in front_cone if math.isfinite(r) and r > 0.0]
-        front_distance = min(valid_ranges) if valid_ranges else float("inf")
+        front_distance = min(valid_ranges) if valid_ranges else float('inf')
 
         # print the current state for debugging purpose
         print(self.state)
@@ -231,10 +238,10 @@ class FSMNode(Node):
             and now - self.close_since > self.stuck_timeout_sec
         )
 
-        if self.state == "WALL FOLLOW":
+        if self.state == 'WALL FOLLOW':
             if front_distance < self.obstacle_distance or stuck or self.bumped:
-                self.set_state("OBSTACLE AVOIDANCE")
-        elif self.state == "OBSTACLE AVOIDANCE":
+                self.set_state('OBSTACLE AVOIDANCE')
+        elif self.state == 'OBSTACLE AVOIDANCE':
             # stay in OBSTACLE AVOIDANCE while still stuck or bumped even if
             # a nudge from the potential field briefly pushed front back out
             if (
@@ -242,16 +249,16 @@ class FSMNode(Node):
                 and not stuck
                 and not self.bumped
             ):
-                self.set_state("WALL FOLLOW")
+                self.set_state('WALL FOLLOW')
 
 
 def main(args=None):
-    """Main function to initialize the ROS2 node and start spinning."""
+    """Initialize the ROS2 node and start spinning."""
     rclpy.init(args=args)
     fsm_node = FSMNode()
     rclpy.spin(fsm_node)
     rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

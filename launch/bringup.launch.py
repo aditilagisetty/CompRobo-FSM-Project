@@ -40,8 +40,10 @@ WORLD_FILES = {
 
 def generate_launch_description():
     """
-    Declare the world/keyboard-node launch arguments, then include the
-    chosen neato2_gazebo world and fsm.launch.py's app nodes.
+    Declare the world/keyboard-node launch arguments and include the nodes.
+
+    Includes the chosen neato2_gazebo world and fsm.launch.py's app
+    nodes.
     """
     world_arg = DeclareLaunchArgument(
         'world', default_value='gauntlet',
@@ -66,8 +68,9 @@ def generate_launch_description():
 
     def include_world(context, *args, **kwargs):
         """
-        Resolve the world launch argument at launch time and include the
-        matching neato2_gazebo world file.
+        Resolve the world launch argument and include the matching world file.
+
+        Resolved at launch time from the neato2_gazebo world files.
         """
         world = LaunchConfiguration('world').perform(context)
         launch_file = WORLD_FILES.get(world, WORLD_FILES['gauntlet'])

@@ -1,6 +1,8 @@
 """
-A 2D occupancy-grid map built from laser scans (RoomMap, written while
-driving) and read back from disk for planning and drawing (SavedMap).
+Represent a 2D occupancy-grid map, live and loaded from disk.
+
+Built from laser scans while driving (RoomMap), and read back from
+disk for planning and drawing (SavedMap).
 """
 
 import math
@@ -10,7 +12,7 @@ import numpy as np
 import yaml
 
 # the map is in the odom frame, so (0, 0) is where odometry started
-DEFAULT_MAP_FILE = os.path.expanduser("~/.ros/room_map.yaml")
+DEFAULT_MAP_FILE = os.path.expanduser('~/.ros/room_map.yaml')
 
 PIXEL_FREE = 254
 PIXEL_OCCUPIED = 0
@@ -28,8 +30,10 @@ class RoomMap:
 
     def __init__(self, size_m=20.0, resolution=0.05, origin_x=None, origin_y=None):
         """
-        Create an empty (all-unknown) square grid size_m wide, centered
-        on the origin unless origin_x/origin_y are given explicitly.
+        Create an empty (all-unknown) square grid size_m meters wide.
+
+        Centered on the origin unless origin_x/origin_y are given
+        explicitly.
         """
         self.resolution = resolution
         self.size = int(round(size_m / resolution))
@@ -55,9 +59,10 @@ class RoomMap:
         lidar_offset_x=0.0,
     ):
         """
-        Fold one laser scan into the grid from robot pose (x, y, yaw):
-        mark the cell each beam ends in more likely occupied, and every
-        cell along the beam before that more likely free.
+        Fold one laser scan into the grid from robot pose (x, y, yaw).
+
+        Marks the cell each beam ends in more likely occupied, and
+        every cell along the beam before that more likely free.
         """
         ranges = np.asarray(ranges, dtype=np.float64)
         # beam i points i * angle_increment ccw from the front, so ranges[0] is straight ahead
@@ -84,8 +89,9 @@ class RoomMap:
 
     def _update(self, xs, ys, delta):
         """
-        Add delta once to every distinct in-bounds cell containing one of
-        the given world points, clamped to +/- LOG_ODDS_LIMIT.
+        Add delta once to every distinct in-bounds cell touched by these points.
+
+        Clamped to +/- LOG_ODDS_LIMIT.
         """
         cols, rows = self.world_to_cell(xs, ys)
         inside = (cols >= 0) & (cols < self.size) & (rows >= 0) & (rows < self.size)
@@ -97,7 +103,8 @@ class RoomMap:
 
     def to_occupancy_data(self):
         """
-        Flatten the grid to nav_msgs/OccupancyGrid's data convention:
+        Flatten the grid to nav_msgs/OccupancyGrid's data convention.
+
         -1 unknown, 0 free, 100 occupied.
         """
         data = np.full(self.log_odds.shape, -1, dtype=np.int8)
@@ -107,8 +114,9 @@ class RoomMap:
 
     def to_image(self):
         """
-        Render the grid as a grayscale image (map_server convention:
-        free is light, occupied is dark, unknown is mid-gray).
+        Render the grid as a grayscale image, map_server convention.
+
+        free is light, occupied is dark, unknown is mid-gray.
         """
         image = np.full(self.log_odds.shape, PIXEL_UNKNOWN, dtype=np.uint8)
         image[self.log_odds < self.FREE_BELOW] = PIXEL_FREE
@@ -117,25 +125,26 @@ class RoomMap:
 
     def save(self, yaml_path=DEFAULT_MAP_FILE):
         """
-        Write the map as a standard map_server PGM + YAML pair and
-        return the YAML path.
+        Write the map as a standard map_server PGM + YAML pair.
+
+        Return the YAML path.
         """
         yaml_path = os.path.expanduser(yaml_path)
         os.makedirs(os.path.dirname(os.path.abspath(yaml_path)), exist_ok=True)
-        pgm_path = os.path.splitext(yaml_path)[0] + ".pgm"
+        pgm_path = os.path.splitext(yaml_path)[0] + '.pgm'
         image = self.to_image()
-        with open(pgm_path, "wb") as f:
-            f.write(b"P5\n%d %d\n255\n" % (image.shape[1], image.shape[0]))
+        with open(pgm_path, 'wb') as f:
+            f.write(b'P5\n%d %d\n255\n' % (image.shape[1], image.shape[0]))
             f.write(image.tobytes())
-        with open(yaml_path, "w") as f:
+        with open(yaml_path, 'w') as f:
             yaml.safe_dump(
                 {
-                    "image": os.path.basename(pgm_path),
-                    "resolution": self.resolution,
-                    "origin": [self.origin_x, self.origin_y, 0.0],
-                    "negate": 0,
-                    "occupied_thresh": 0.65,
-                    "free_thresh": 0.196,
+                    'image': os.path.basename(pgm_path),
+                    'resolution': self.resolution,
+                    'origin': [self.origin_x, self.origin_y, 0.0],
+                    'negate': 0,
+                    'occupied_thresh': 0.65,
+                    'free_thresh': 0.196,
                 },
                 f,
             )
@@ -144,8 +153,9 @@ class RoomMap:
 
 class SavedMap:
     """
-    A map loaded back from disk, for planning (a_star.py) and drawing
-    (path_following.py) against.
+    A map loaded back from disk, for planning (a_star.py) and drawing.
+
+    Used for drawing by path_following.py.
     """
 
     def __init__(self, image, resolution, origin_x, origin_y):
@@ -172,13 +182,13 @@ class SavedMap:
         with open(yaml_path) as f:
             info = yaml.safe_load(f)
         pgm_path = os.path.join(
-            os.path.dirname(os.path.abspath(yaml_path)), info["image"]
+            os.path.dirname(os.path.abspath(yaml_path)), info['image']
         )
-        with open(pgm_path, "rb") as f:
+        with open(pgm_path, 'rb') as f:
             raw = f.read()
         image = _parse_pgm(raw)
-        origin = info["origin"]
-        return cls(image, float(info["resolution"]), float(origin[0]), float(origin[1]))
+        origin = info['origin']
+        return cls(image, float(info['resolution']), float(origin[0]), float(origin[1]))
 
     def pixel_to_world(self, col, row):
         """Convert a pixel (col, row), row 0 at the top, to world (x, y)."""
@@ -194,9 +204,10 @@ class SavedMap:
 
     def explored_bounds(self, margin_cells=30):
         """
-        Return (col0, row0, col1, row1) around everything that isn't
-        unknown, padded by margin_cells -- the whole image if nothing has
-        been observed yet.
+        Return (col0, row0, col1, row1) around everything that isn't unknown.
+
+        Padded by margin_cells -- the whole image if nothing has been
+        observed yet.
         """
         known_rows, known_cols = np.nonzero(self.image != PIXEL_UNKNOWN)
         if len(known_rows) == 0:
@@ -210,9 +221,10 @@ class SavedMap:
 
     def cell_state_at(self, x, y, radius=0.0):
         """
-        Return "occupied", "unknown", or "free" for a circular footprint
-        of the given radius centered at world (x, y); "unknown" if any part
-        of that footprint falls off the map.
+        Return 'occupied', 'unknown', or 'free' for a circular footprint.
+
+        For the given radius centered at world (x, y); 'unknown' if
+        any part of that footprint falls off the map.
         """
         col, row = self.world_to_pixel(x, y)
         col, row = int(round(col)), int(round(row))
@@ -221,38 +233,39 @@ class SavedMap:
         c0, c1 = col - r_cells, col + r_cells + 1
         r0, r1 = row - r_cells, row + r_cells + 1
         if c0 < 0 or r0 < 0 or c1 > self.width or r1 > self.height:
-            return "unknown"
+            return 'unknown'
         offsets = np.arange(-r_cells, r_cells + 1)
         inside = offsets[:, None] ** 2 + offsets[None, :] ** 2 <= r_cells**2
         window = self.image[r0:r1, c0:c1][inside]
         if (window == PIXEL_OCCUPIED).any():
-            return "occupied"
+            return 'occupied'
         if (window == PIXEL_UNKNOWN).any():
-            return "unknown"
-        return "free"
+            return 'unknown'
+        return 'free'
 
 
 def _parse_pgm(raw):
     """
-    Parse a binary (P5) PGM file's bytes into a uint8 height x width
-    array. Only what SavedMap.load needs -- no P2/ASCII support.
+    Parse a binary (P5) PGM file's bytes into a uint8 height x width array.
+
+    Only what SavedMap.load needs -- no P2/ASCII support.
     """
     tokens = []
     pos = 0
     while len(tokens) < 4:
-        while raw[pos : pos + 1].isspace():
+        while raw[pos:pos + 1].isspace():
             pos += 1
-        if raw[pos : pos + 1] == b"#":
-            pos = raw.index(b"\n", pos) + 1
+        if raw[pos:pos + 1] == b'#':
+            pos = raw.index(b'\n', pos) + 1
             continue
         end = pos
-        while not raw[end : end + 1].isspace():
+        while not raw[end:end + 1].isspace():
             end += 1
         tokens.append(raw[pos:end])
         pos = end
     pos += 1
-    if tokens[0] != b"P5":
-        raise ValueError("only binary PGM (P5) maps are supported")
+    if tokens[0] != b'P5':
+        raise ValueError('only binary PGM (P5) maps are supported')
     width, height = int(tokens[1]), int(tokens[2])
     return (
         np.frombuffer(raw, dtype=np.uint8, count=width * height, offset=pos)

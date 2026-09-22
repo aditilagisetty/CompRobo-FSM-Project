@@ -1,23 +1,21 @@
 """
+Pilot the robot in a square with time-based, estop-aware driving.
 
-
-Draw Square
---------
-This node encapsulates implements a simple time-based approach to driving the
-robot in a square.  The system makes use of a a special ``estop`` topic that
-can trigger the robot to automatically stop when the value is true is received
-on that topic.
+This node implements a simple time-based approach to driving the
+robot in a square. The system makes use of a special ``estop`` topic
+that can trigger the robot to automatically stop when true is
+received on that topic.
 """
 
 import math
-
-import rclpy
-from rclpy.node import Node
 from threading import Thread
 from time import sleep
+
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 
 from .angle_helpers import euler_from_quaternion
@@ -28,11 +26,13 @@ class DrawSquare(Node):
 
     def __init__(self):
         """
-        Set up the estop/scan/odom subscriptions, the current_mode
-        subscription that re-triggers the square under the gateway FSM, and
-        start the first drive on its own thread.
+        Set up subscriptions and start the first drive on its own thread.
+
+        Sets up the estop/scan/odom subscriptions and the
+        current_mode subscription that re-triggers the square under
+        the gateway FSM.
         """
-        super().__init__("draw_square_with_estop")
+        super().__init__('draw_square_with_estop')
         self.manual_estop = False
         self.obstacle_close = False
         self.stop_distance = 0.5
@@ -40,23 +40,24 @@ class DrawSquare(Node):
         self.current_y = 0.0
         self.current_yaw = 0.0
         # create a thread to handle long-running component
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel_drive_square", 10)
-        self.create_subscription(Bool, "estop", self.handle_estop, 10)
-        self.create_subscription(LaserScan, "scan", self.process_scan, 10)
-        self.create_subscription(Odometry, "odom", self.process_odom, 10)
-        self.create_subscription(String, "current_mode", self.process_current_mode, 10)
+        self.vel_pub = self.create_publisher(Twist, 'cmd_vel_drive_square', 10)
+        self.create_subscription(Bool, 'estop', self.handle_estop, 10)
+        self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
+        self.create_subscription(Odometry, 'odom', self.process_odom, 10)
+        self.create_subscription(String, 'current_mode', self.process_current_mode, 10)
         self._last_mode = None
         self.run_loop_thread = Thread(target=self.run_loop)
         self.run_loop_thread.start()
 
     def process_current_mode(self, msg):
         """
-        Re-run the square whenever the gateway FSM freshly enters DRIVE
-        SQUARE, since run_loop only drives it once per thread and otherwise
+        Re-run the square whenever the gateway FSM freshly enters DRIVE SQUARE.
+
+        run_loop only drives it once per thread and otherwise
         wouldn't do anything the next time that state is entered.
         """
         entered_drive_square = (
-            msg.data == "DRIVE SQUARE" and self._last_mode != "DRIVE SQUARE"
+            msg.data == 'DRIVE SQUARE' and self._last_mode != 'DRIVE SQUARE'
         )
         self._last_mode = msg.data
         if entered_drive_square and not self.run_loop_thread.is_alive():
@@ -65,15 +66,18 @@ class DrawSquare(Node):
 
     def stopped(self):
         """
-        Whether the robot should currently be halted, from either the
-        manual estop topic or a nearby obstacle.
+        Return whether the robot should currently be halted.
+
+        From either the manual estop topic or a nearby obstacle.
         """
         return self.manual_estop or self.obstacle_close
 
     def process_odom(self, msg):
         """
-        Tracks the robot's current position and yaw so turn_left/
-        drive_forward can measure real motion instead of assuming a speed.
+        Track the robot's current position and yaw from odometry.
+
+        So turn_left/drive_forward can measure real motion instead
+        of assuming a speed.
         """
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
@@ -92,10 +96,10 @@ class DrawSquare(Node):
 
     def handle_estop(self, msg):
         """
-        Handles messages received on the estop topic
-        Args:
-            msg (std_msgs.msg.Bool): the message that takes value true if we
-            estop and false otherwise.
+        Handle messages received on the estop topic.
+
+        msg (std_msgs.msg.Bool) takes value true if we estop and
+        false otherwise.
         """
         self.manual_estop = bool(msg.data)
         if self.manual_estop:
@@ -103,44 +107,43 @@ class DrawSquare(Node):
 
     def process_scan(self, msg):
         """
-        Handles laser scan data, triggering the same stop condition as.
+        Handle laser scan data, triggering the same stop condition as estop.
 
-        the estop topic if something is within stop_distance in front of the
-        robot, and clearing it once the obstacle is no longer close.
-
-        Args:
-            msg (sensor_msgs.msg.LaserScan): the current laser scan.
+        Triggers if something is within stop_distance in front of
+        the robot, and clears it once the obstacle is no longer
+        close. msg is the current sensor_msgs.msg.LaserScan.
         """
         front_range = msg.ranges[0]
         was_close = self.obstacle_close
         self.obstacle_close = 0.0 < front_range < self.stop_distance
         if self.obstacle_close and not was_close:
-            print(f"Obstacle detected {front_range:.2f}m ahead, stopping!")
+            print(f'Obstacle detected {front_range:.2f}m ahead, stopping!')
             self.drive(linear=0.0, angular=0.0)
 
     def run_loop(self):
         """
-        Executes the main logic for driving the square.  This function does
-        not return until the square is finished or the estop is pressed.
+        Execute the main logic for driving the square.
+
+        Does not return until the square is finished or the estop is
+        pressed.
         """
         # the first message on the publisher is often missed
         self.drive(0.0, 0.0)
         sleep(1)
         for _ in range(4):
             if not self.stopped():
-                print("driving forward")
+                print('driving forward')
                 self.drive_forward(1.0)
             if not self.stopped():
-                print("turning left")
+                print('turning left')
                 self.turn_left()
-        print("done with run loop")
+        print('done with run loop')
 
     def drive(self, linear, angular):
         """
-        Drive with the specified linear and angular velocity
-        Args:
-            linear (_type_): the linear velocity in m/s
-            angular (_type_): the angular velocity in radians/s.
+        Drive with the specified linear and angular velocity.
+
+        linear is in m/s, angular is in radians/s.
         """
         msg = Twist()
         msg.linear.x = linear
@@ -149,11 +152,13 @@ class DrawSquare(Node):
 
     def settle(self, duration=1.0):
         """
-        Command zero velocity and wait for any residual motion (from
-        deceleration lag) to fully die down before switching to a different
-        kind of motion. Without this, turn_left can start commanding
-        rotation while the robot is still physically coasting forward from
-        the previous drive_forward (and vice versa), turning a clean
+        Command zero velocity and wait for residual motion to die down.
+
+        Waits for any residual motion (from deceleration lag) to
+        fully die down before switching to a different kind of
+        motion. Without this, turn_left can start commanding rotation
+        while the robot is still physically coasting forward from the
+        previous drive_forward (and vice versa), turning a clean
         stop-then-pivot into an arc.
         """
         self.drive(linear=0.0, angular=0.0)
@@ -161,10 +166,11 @@ class DrawSquare(Node):
 
     def turn_left(self):
         """
-        Execute a 90 degree left turn using proportional control on the
-        remaining angle, so the robot is already slowing down as it
-        approaches the target instead of coasting past it under momentum
-        after a hard stop command.
+        Turn left 90 degrees using proportional control on the remaining angle.
+
+        So the robot is already slowing down as it approaches the
+        target instead of coasting past it under momentum after a
+        hard stop command.
         """
         max_angular_vel = 0.2  # lowered from 0.3 to shrink the coast-to-stop distance
         min_angular_vel = 0.05  # floor so the final approach doesn't stall
@@ -191,21 +197,18 @@ class DrawSquare(Node):
             self.drive(linear=0.0, angular=0.0)
         actual_deg = math.degrees(self._yaw_turned(self.current_yaw, start_yaw))
         print(
-            f"turn_left done: target=90.0deg actual={actual_deg:.1f}deg "
-            f"error={actual_deg - 90.0:+.1f}deg stopped_early={stopped_early}"
+            f'turn_left done: target=90.0deg actual={actual_deg:.1f}deg '
+            f'error={actual_deg - 90.0:+.1f}deg stopped_early={stopped_early}'
         )
 
     def drive_forward(self, distance):
         """
-        Drive straight until odometry reports we've covered the given.
+        Drive straight until odometry reports the given distance is covered.
 
-        distance, using proportional control on the remaining distance so
-        the robot is already slowing down as it approaches the target
+        Uses proportional control on the remaining distance so the
+        robot is already slowing down as it approaches the target
         instead of coasting past it under momentum after a hard stop.
-
-        Args:
-            distance (_type_): the distance to drive forward.  Only positive
-            values are supported.
+        distance must be positive.
         """
         max_linear_vel = 0.1  # same top speed as before
         min_linear_vel = 0.02  # floor so the final approach doesn't stall
@@ -239,8 +242,8 @@ class DrawSquare(Node):
             self.drive(linear=0.0, angular=0.0)
         actual_traveled = math.hypot(self.current_x - start_x, self.current_y - start_y)
         print(
-            f"drive_forward done: target={distance:.2f}m actual={actual_traveled:.2f}m "
-            f"error={actual_traveled - distance:+.2f}m stopped_early={stopped_early}"
+            f'drive_forward done: target={distance:.2f}m actual={actual_traveled:.2f}m '
+            f'error={actual_traveled - distance:+.2f}m stopped_early={stopped_early}'
         )
 
 
@@ -253,5 +256,5 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

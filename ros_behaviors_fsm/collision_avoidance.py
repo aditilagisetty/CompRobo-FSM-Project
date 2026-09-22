@@ -1,41 +1,45 @@
 """
+Steer around obstacles and hard-stop when something gets too close.
 
-
-Collision Avoidance:
-Combines what used to be two separate behaviors:
-- Reactive stopping (bump-triggered / very-close-range triggered)
-- Continuous steering around obstacles (potential fields) so the robot keeps
-  moving and reroutes, rather than just halting, for anything that isn't an
-  immediate emergency.
+Combines what used to be two separate behaviors: reactive stopping
+(bump-triggered / very-close-range triggered), and continuous
+steering around obstacles (potential fields) so the robot keeps
+moving and reroutes, rather than just halting, for anything that
+isn't an immediate emergency.
 """
 
 import math
 import time
 
+from geometry_msgs.msg import Point, Twist
+from neato2_interfaces.msg import Bump
 import rclpy
 from rclpy.node import Node
-from neato2_interfaces.msg import Bump
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Point, Twist
 from visualization_msgs.msg import Marker
 
 
 class CollisionAvoidance(Node):
     """
-    Steer around obstacles with a potential field, and hard-stop for
-    anything (or a bump) that's already too close for steering to help.
+    Steer around obstacles with a potential field.
+
+    Hard-stops for anything (or a bump) that's already too close for
+    steering to help.
     """
 
     def __init__(self):
         """
-        Set up the bump/scan subscriptions, the cmd_vel and RViz-marker
-        publishers, and the hard-stop/potential-field tuning constants.
+        Set up subscriptions, publishers, and tuning constants.
+
+        Sets up the bump/scan subscriptions, the cmd_vel and
+        RViz-marker publishers, and the hard-stop/potential-field
+        tuning constants.
         """
-        super().__init__("collision_avoidance")
-        self.create_subscription(Bump, "bump", self.process_bump, 10)
-        self.create_subscription(LaserScan, "scan", self.process_scan, 10)
-        self.vel_pub = self.create_publisher(Twist, "cmd_vel_collision_avoidance", 10)
-        self.marker_pub = self.create_publisher(Marker, "collision_avoidance_force", 10)
+        super().__init__('collision_avoidance')
+        self.create_subscription(Bump, 'bump', self.process_bump, 10)
+        self.create_subscription(LaserScan, 'scan', self.process_scan, 10)
+        self.vel_pub = self.create_publisher(Twist, 'cmd_vel_collision_avoidance', 10)
+        self.marker_pub = self.create_publisher(Marker, 'collision_avoidance_force', 10)
 
         self.stop_distance = 0.3  # hard-stop trigger in meters, straight ahead
         # the potential field only ever pushes the robot forward, so an obstacle
@@ -71,14 +75,11 @@ class CollisionAvoidance(Node):
     # the recorded bags
     def _range_at_angle(self, msg, degrees):
         """
-        Looks up the scan range closest to the degrees from the.
+        Look up the scan range closest to the given degrees from the front.
 
-        robots forward direction where 0 is straight ahead, 90 is
-        facing left, and -90 is right
-
-        Returns range, returns inf for missing readings.
+        0 is straight ahead, 90 is facing left, and -90 is right.
+        Returns inf for missing readings.
         """
-
         angle_rad = math.radians(degrees)
         # back calculate to find range index
         # wrap at one full turn
@@ -87,13 +88,15 @@ class CollisionAvoidance(Node):
         r = msg.ranges[index]
         # return of 0 means there is no obsticle detected rather than
         # there is an obstacle at distance 0 so return inf
-        return r if r > 0.0 else float("inf")
+        return r if r > 0.0 else float('inf')
 
     # do the _range_at_angle function for a large spread of angles
     def _min_range_in_cone(self, msg, center_deg, half_width_deg):
         """
-        Smallest valid range within plus or minus half_width_deg of
-        center_deg such that a dropped reading cant hide an obstacle.
+        Return the smallest valid range within the cone around center_deg.
+
+        Within plus or minus half_width_deg, so a dropped reading
+        can't hide an obstacle.
         """
         readings = [
             self._range_at_angle(msg, center_deg + offset)
@@ -103,19 +106,17 @@ class CollisionAvoidance(Node):
 
     def process_bump(self, msg):
         """
-        Set self.bumped True on any real bump message; check_bump_timeout
-        is what clears it, since the simulator never sends an explicit
-        "bump cleared" message.
+        Set self.bumped True on any real bump message.
+
+        check_bump_timeout is what clears it, since the simulator
+        never sends an explicit "bump cleared" message.
         """
         if msg.left_front or msg.left_side or msg.right_front or msg.right_side:
             self.last_bump_time = time.monotonic()
             self.bumped = True
 
     def check_bump_timeout(self):
-        """
-        Clear self.bumped once bump_timeout_sec has passed with no new
-        bump message.
-        """
+        """Clear self.bumped once bump_timeout_sec has passed with no new bump."""
         if (
             self.bumped
             and time.monotonic() - self.last_bump_time > self.bump_timeout_sec
@@ -125,8 +126,9 @@ class CollisionAvoidance(Node):
     # decides whether to hard stop or steer around an obstacle
     def process_scan(self, msg):
         """
-        Hard-stop if bumped or something is too close (with hysteresis
-        on the release distance); otherwise steer with the potential field.
+        Hard-stop if bumped or too close; otherwise steer with the potential field.
+
+        Uses hysteresis on the release distance.
         """
         self.check_bump_timeout()
         self.front_range = self._min_range_in_cone(msg, center_deg=0, half_width_deg=10)
@@ -176,14 +178,15 @@ class CollisionAvoidance(Node):
 
     def compute_potential_field(self, msg):
         """
-        Returns the net (x, y) force in the robot's frame: a constant.
+        Return the net (x, y) force in the robot's frame.
 
-        forward attractive pull plus a repulsive contribution from every
-        scan reading within self.influence_radius.
-
-        For each valid range r at angle theta closer than self.influence_radius
-        add a force pointing from the obstacle back toward the robot, rotated
-        by self.repulsion_bias_angle, with magnitude that grows as r shrinks.
+        A constant forward attractive pull plus a repulsive
+        contribution from every scan reading within
+        self.influence_radius. For each valid range r at angle theta
+        closer than self.influence_radius, adds a force pointing from
+        the obstacle back toward the robot, rotated by
+        self.repulsion_bias_angle, with magnitude that grows as r
+        shrinks.
         """
         net_x, net_y = self.k_attractive, 0.0  # forward pull
         for i, r in enumerate(msg.ranges):
@@ -202,11 +205,12 @@ class CollisionAvoidance(Node):
 
     def publish_force_marker(self, x, y):
         """
-        Visualizes the net force vector as an arrow from the robot's
-        origin, in RViz.
+        Visualize the net force vector as an arrow from the robot's origin.
+
+        Published in RViz.
         """
         marker = Marker()
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = 'base_link'
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
@@ -226,7 +230,7 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
 
 

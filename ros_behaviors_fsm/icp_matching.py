@@ -1,7 +1,9 @@
 """
-2D point-to-point ICP: aligns a laser scan against a saved map's occupied
-cells to correct odometry drift. icp_align is the entry point icp_localizer.py
-calls each scan; the rest are its building blocks.
+Align a laser scan against a saved map to correct odometry drift.
+
+Uses 2D point-to-point ICP against the map's occupied cells.
+icp_align is the entry point icp_localizer.py calls each scan; the
+rest are its building blocks.
 """
 
 import math
@@ -41,8 +43,9 @@ def transform_points(points, pose):
 
 def scan_to_points(ranges, angle_increment, range_min, range_max, lidar_offset_x=0.0):
     """
-    Convert a LaserScan's ranges into an (N, 2) array of valid hit points
-    in the robot frame (ranges[0] straight ahead, ccw from there).
+    Convert a LaserScan's ranges into an (N, 2) array of valid hit points.
+
+    In the robot frame (ranges[0] straight ahead, ccw from there).
     """
     ranges = np.asarray(ranges, dtype=float)
     angles = np.arange(len(ranges)) * angle_increment
@@ -53,27 +56,31 @@ def scan_to_points(ranges, angle_increment, range_min, range_max, lidar_offset_x
 
 class MapPoints:
     """
-    A saved map's occupied cells as world-frame points, with a nearest-
-    neighbor lookup for ICP correspondences.
+    Hold a saved map's occupied cells as world-frame points.
+
+    Provides a nearest-neighbor lookup for ICP correspondences.
     """
 
     def __init__(self, saved_map):
         """
-        Collect every occupied pixel's world-frame center once, up front,
-        so nearest() doesn't have to rescan the image each call.
+        Collect every occupied pixel's world-frame center once, up front.
+
+        So nearest() doesn't have to rescan the image each call.
         """
         rows, cols = np.nonzero(saved_map.image == PIXEL_OCCUPIED)
         xs, ys = saved_map.pixel_to_world(cols + 0.5, rows + 0.5)
         self.points = np.column_stack([xs, ys])
 
     def __len__(self):
-        """Number of occupied map points."""
+        """Return the number of occupied map points."""
         return len(self.points)
 
     def nearest(self, points):
         """
-        For each row in points, return (nearest map point, distance to
-        it), by brute-force distance to every occupied cell.
+        Find the nearest occupied map point for each row in points.
+
+        Return (nearest map point, distance to it), by brute-force
+        distance to every occupied cell.
         """
         d2 = (
             (points**2).sum(1)[:, None]
@@ -87,10 +94,13 @@ class MapPoints:
 
 def find_correspondences(scan_points, map_points, max_distance):
     """
-    scan_points: (N, 2) already in the map frame
-    Pair every scan point with its nearest occupied map point
-    (map_points.nearest) and drop pairs you don't trust.
-    Return (scan_pts, map_pts), both (K, 2), row i of one matching row i of the other.
+    Pair each scan point with its nearest trusted occupied map point.
+
+    scan_points: (N, 2) already in the map frame. Pairs are matched
+    via map_points.nearest, and untrusted pairs are dropped.
+
+    Return (scan_pts, map_pts), both (K, 2), row i of one matching
+    row i of the other.
     """
     nearest_points, distance = map_points.nearest(scan_points)
     trusted = distance < max_distance
@@ -99,7 +109,11 @@ def find_correspondences(scan_points, map_points, max_distance):
 
 def best_rigid_transform(source, target):
     """
-    (K, 2) point sets with row i of source matching row i of target
+    Fit the best rigid transform (dx, dy, dyaw) from source to target.
+
+    source, target: (K, 2) point sets with row i of source matching
+    row i of target.
+
     Return (dx, dy, dyaw) minimizing sum |R(dyaw) @ s_i + (dx, dy) - t_i|^2.
     """
     source_center = source.mean(axis=0)
@@ -117,10 +131,15 @@ def best_rigid_transform(source, target):
 
 def icp_align(scan_points, map_points, guess, max_iterations=20, max_distance=0.5):
     """
-    scan_points: (N, 2) in the robot frame. guess: (x, y, yaw) of the robot in the map
-    Return (pose, inlier_fraction, rms_error): the refined (x, y, yaw), the fraction
-    of scan points that ended up with a trusted match, and the rms distance of those
-    matches in meters. Return None if it cannot produce an estimate.
+    Align scan_points to map_points with ICP, starting from guess.
+
+    scan_points: (N, 2) in the robot frame. guess: (x, y, yaw) of the
+    robot in the map.
+
+    Return (pose, inlier_fraction, rms_error): the refined (x, y,
+    yaw), the fraction of scan points that ended up with a trusted
+    match, and the rms distance of those matches in meters. Return
+    None if it cannot produce an estimate.
     """
     if len(scan_points) < 3 or len(map_points) == 0:
         return None
