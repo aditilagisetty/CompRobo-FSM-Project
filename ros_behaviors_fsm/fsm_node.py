@@ -85,6 +85,10 @@ class FSMNode(Node):
             front_distance > 0.7 and self.state == "OBSTACLE AVOIDANCE"
         ):  # leeway to prevent rapid switching
             self.state = "WALL FOLLOW"
+        elif (
+            self.state == "TELEOP SCAN" and not self.has_teleop_run
+        ):  # If in TELEOP SCAN mode but teleop_scan hasn't run yet
+            self.state = "WALL FOLLOW"
 
 
 def main(args=None):
