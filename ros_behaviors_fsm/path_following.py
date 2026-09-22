@@ -546,6 +546,16 @@ class PathPainter:
             self.canvas.create_line(x, y, hx, hy, fill="#1f77b4", width=2, tags="robot")
         self.root.after(self.REFRESH_MS, self.tick)
 
+    def update_ui(self):
+        """Processes one iteration of Tkinter events without blocking execution."""
+        try:
+            self.root.update_idletasks()
+            self.root.update()
+            return True
+        except tk.TclError:
+            # Handle cases where the window was closed manually via window manager [X]
+            return False
+
     def close(self):
         self.node.cancel()
         try:

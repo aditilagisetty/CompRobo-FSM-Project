@@ -11,13 +11,17 @@ digraph FSMNode {
     wf    [label="wall_follower.py",       fillcolor="#DCFCE7", color="#16A34A", fontcolor="#14532D"];
     ca    [label="collision_avoidance.py", fillcolor="#FEE2E2", color="#DC2626", fontcolor="#7F1D1D"];
     ts    [label="teleop_scan.py",         fillcolor="#DBEAFE", color="#2563EB", fontcolor="#1E3A8A"];
-    kb    [label="keyboard\n't' / 'a'", shape=oval, fillcolor="#FEF3C7", color="#D97706"];
+    ds    [label="drive_square.py\n(runs its square once,\nimmediately on startup --\nnot gated by self.state)",
+           fillcolor="#DBEAFE", color="#2563EB", fontcolor="#1E3A8A"];
+    pf    [label="path_following.py\n(shows/hides its own GUI\nvia current_mode, added\n2026-09-22)", fillcolor="#EDE9FE", color="#7C3AED", fontcolor="#4C1D95"];
+    kb    [label="keyboard\n't' start scan, 'm' after\nscanning, 'g' wall-follow, 'p' path", shape=oval, fillcolor="#FEF3C7", color="#D97706"];
 
     subgraph cluster_gw {
         label="fsm_node.py -- publishes cmd_vel, subscribes to the rest"; labeljust=l;
         fontsize=11; fontcolor="#6B7280"; style="rounded,dashed"; color="#9CA3AF"; margin=18;
-        state [label="self.state\n'WALL FOLLOW' | 'OBSTACLE AVOIDANCE' | 'TELEOP SCAN'",
+        state [label="self.state\n'WALL FOLLOW' | 'OBSTACLE AVOIDANCE' |\n'TELEOP SCAN' | 'DRIVE SQUARE' | 'PATH FOLLOWING'",
                shape=box, style="rounded,filled", fillcolor="#F3F4F6", color="#6B7280", fontcolor="#1F2937"];
+        mode_pub [label="mode_pub: publishes\nself.state on current_mode\n(added 2026-09-22)", fillcolor="#F3F4F6", color="#6B7280", fontcolor="#1F2937"];
         mux   [label="forward whichever\ncmd_vel_* matches\nself.state", fillcolor="#EDE9FE", color="#7C3AED", fontcolor="#4C1D95"];
     }
 
@@ -25,16 +29,23 @@ digraph FSMNode {
     scan  [label="/scan", shape=oval, fillcolor="#F3F4F6", color="#6B7280"];
 
     wf -> mux [label="cmd_vel_wall_follower"];
-    ca -> mux [label="cmd_vel_collision_avoidance\n(fixed 2026-09-22 -- was\nmis-wired to a different\ntopic name, so this path\nnever forwarded anything)", color="#DC2626", fontcolor="#7F1D1D"];
+    ca -> mux [label="cmd_vel_collision_avoidance"];
     ts -> mux [label="cmd_vel_teleop_scan"];
+    ds -> mux [label="cmd_vel_drive_square"];
+    pf -> mux [label="cmd_vel_path_following"];
     mux -> robot [label="cmd_vel"];
+    state -> mode_pub [style=dashed];
+    mode_pub -> pf [label="current_mode", style=dashed, color="#7C3AED", fontcolor="#5B21B6"];
 
-    scan -> state [label="front reading:\n<0.5m enters OBSTACLE AVOIDANCE\n>0.7m returns to WALL FOLLOW"];
+    scan -> state [label="front reading:\n<0.5m enters OBSTACLE AVOIDANCE\n>0.7m and not stuck returns to WALL FOLLOW\n(also enters after 3s spent under 1.0m --\nfixed 2026-09-22, see stuck note below)"];
     kb -> state [style=dashed, color="#D97706", fontcolor="#92400E",
                  label="crashes if stdin isn't a real\nterminal (e.g. under ros2 launch) --\nswitch then doesn't work"];
+    stuck [shape=note, style=filled, fillcolor="#FEF3C7", color="#D97706", fontcolor="#92400E", fontsize=10,
+           label="fixed 2026-09-22: wall_follower turns\naway on its own at 1.0m, which kept\nfront just above the 0.5m switch\nforever -- state stayed WALL FOLLOW\n224/224 scans in a 45s test. Added a\n3s stuck timeout, independent of state,\nthat forces the switch anyway. Verified\nlive: 90s run, 6 clean transitions,\n7.5m travelled, 0 bumps, robot visibly\nescapes corners instead of spinning."];
+    stuck -> state [style=dotted, color="#D97706", arrowhead=none];
     state -> mux [style=dashed];
 
-    note [shape=note, style=filled, fillcolor="#FEF3C7", color="#D97706", fontcolor="#92400E", fontsize=10,
-          label="fsm.launch.py does not run yet:\nnot installed to share/, and names\nthree packages that do not exist\n(all three nodes above are really\nin one package, ros_behaviors_fsm)"];
+    note [shape=note, style=filled, fillcolor="#DCFCE7", color="#16A34A", fontcolor="#14532D", fontsize=10,
+          label="fixed 2026-09-22: launch/fsm.launch.py is now\ninstalled (setup.py's data_files) and names\nros_behaviors_fsm for all three nodes.\nros2 launch ros_behaviors_fsm bringup.launch.py\nalso starts Gazebo first. Verified live: both\nlaunch and bring up every node with no errors\n(besides the keyboard-listener note above,\nwhich is a stdin limitation, not a launch bug)."];
     { rank=same; note; robot; }
 }
