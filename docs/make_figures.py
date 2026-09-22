@@ -14,7 +14,10 @@ BAGS = os.path.join(HERE, '..', 'bags')
 OUT = os.path.join(HERE, 'figures')
 
 BLUE, GREEN, RED, PURPLE, AMBER, GREY = '#2563EB', '#16A34A', '#DC2626', '#7C3AED', '#D97706', '#6B7280'
-STATE_COLORS = {'idle': '#E5E7EB', 'following': '#C4B5FD', 'paused': '#FCD34D', 'done': '#86EFAC'}
+STATE_COLORS = {
+    'idle': '#E5E7EB', 'following': '#C4B5FD', 'paused': '#FCD34D', 'done': '#86EFAC',
+    'WALL FOLLOW': '#BBF7D0', 'OBSTACLE AVOIDANCE': '#FECACA',
+}
 
 plt.rcParams.update({
     'font.family': 'DejaVu Sans', 'font.size': 10, 'axes.titlesize': 11.5, 'axes.titleweight': 'bold',
@@ -122,6 +125,21 @@ def status_spans(status_msgs, t0, t_end):
     return spans
 
 
+def mode_spans(mode_msgs, t0, t_end, initial):
+    """Like status_spans, but seeded with a known initial value instead of
+    None -- fsm_node.py's current_mode is only published on a transition,
+    not at startup, so without this the segment before the first message
+    (fsm_node.py's documented default, "WALL FOLLOW") would be dropped.
+    """
+    spans, current, start = [], initial, 0.0
+    for t, m in mode_msgs:
+        if m.data != current:
+            spans.append((start, t - t0, current))
+            current, start = m.data, t - t0
+    spans.append((start, t_end, current))
+    return spans
+
+
 def figure_path_following():
     d = read_bag('path_following_demo', ['/odom', '/cmd_vel', '/path_following_status', '/drawn_path'])
     t0 = d['/odom'][0][0]
@@ -184,8 +202,158 @@ def figure_path_following():
     plt.close(fig)
 
 
+def draw_bare_path(ax, od):
+    """XY trajectory colored by time, for bags with no /room_map to draw
+    it over (drive_square_demo, wall_follower_demo, fsm_node_demo).
+    """
+    sc = ax.scatter(od[:, 1], od[:, 2], c=od[:, 0], cmap='viridis', s=6, zorder=3)
+    ax.plot(*od[0, 1:], 'o', color=GREEN, ms=9, mec='white', mew=1.5, zorder=4, label='start')
+    ax.plot(*od[-1, 1:], 's', color=RED, ms=9, mec='white', mew=1.5, zorder=4, label='end')
+    ax.set_aspect('equal')
+    ax.set_xlabel('x in odom frame (m)')
+    ax.set_ylabel('y in odom frame (m)')
+    ax.legend(loc='best', frameon=True, framealpha=0.95)
+    return sc
+
+
+def figure_drive_square():
+    d = read_bag('drive_square_demo', ['/odom', '/cmd_vel', '/scan'])
+    t0 = d['/odom'][0][0]
+    od, cv = odom_xy(d['/odom'], t0), cmd_vel(d['/cmd_vel'], t0)
+    # drive_square.py itself reads msg.ranges[0] directly as the front
+    # range (correct in the simulator's layout, see WRITEUP.md Behavior 2)
+    front = np.array([(t - t0, m.ranges[0]) for t, m in d['/scan']])
+    stop_distance = 0.5
+    close = front[(front[:, 1] > 0) & (front[:, 1] < stop_distance)]
+    estop_t = close[0, 0] if len(close) else None
+
+    fig = plt.figure(figsize=(12.5, 5.2))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1, 1], hspace=0.12, wspace=0.25)
+    ax_path = fig.add_subplot(gs[:, 0])
+    ax_lin = fig.add_subplot(gs[0, 1])
+    ax_ang = fig.add_subplot(gs[1, 1], sharex=ax_lin)
+
+    sc = draw_bare_path(ax_path, od)
+    fig.colorbar(sc, ax=ax_path, orientation='horizontal', fraction=0.045, pad=0.14).set_label('time (s)')
+    ax_path.set_title('Path driven (odometry)')
+    if estop_t is not None:
+        ax_path.plot(*od[np.searchsorted(od[:, 0], estop_t), 1:], '*', color=AMBER,
+                     ms=16, mec='white', mew=1, zorder=5, label=f'e-stop at t={estop_t:.1f}s')
+        ax_path.legend(loc='best', frameon=True, framealpha=0.95, fontsize=8.5)
+
+    for ax in (ax_lin, ax_ang):
+        if estop_t is not None:
+            ax.axvspan(estop_t, cv[-1, 0], color=STATE_COLORS['paused'], alpha=0.35, lw=0,
+                       label='front < 0.5m (e-stop)' if ax is ax_lin else None)
+    ax_lin.step(cv[:, 0], cv[:, 1], where='post', color=BLUE, lw=1.6)
+    ax_lin.set_ylabel('linear (m/s)')
+    ax_lin.set_title('Commands sent to /cmd_vel')
+    if estop_t is not None:
+        ax_lin.legend(loc='upper right', frameon=True, framealpha=0.95, fontsize=8)
+    plt.setp(ax_lin.get_xticklabels(), visible=False)
+    ax_ang.step(cv[:, 0], cv[:, 2], where='post', color=AMBER, lw=1.6)
+    ax_ang.set_ylabel('angular (rad/s)')
+    style_time_axis(ax_ang, 'time (s)')
+
+    fig.suptitle('drive_square_demo: driving a 1m square (44 s)', fontsize=13, fontweight='bold', y=0.98)
+    fig.savefig(os.path.join(OUT, 'drive_square_demo.png'), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+
+def figure_wall_follower():
+    d = read_bag('wall_follower_demo', ['/odom', '/cmd_vel'])
+    t0 = d['/odom'][0][0]
+    od, cv = odom_xy(d['/odom'], t0), cmd_vel(d['/cmd_vel'], t0)
+    # wall_follower.py's fixed corner turn-away is +/-0.4 rad/s; anything
+    # close to that (not the smaller proportional steering correction) is a
+    # turn-away, not routine following
+    turn_away = np.abs(np.abs(cv[:, 2]) - 0.4) < 0.02
+
+    fig = plt.figure(figsize=(12.5, 5.2))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1, 1], hspace=0.12, wspace=0.25)
+    ax_path = fig.add_subplot(gs[:, 0])
+    ax_lin = fig.add_subplot(gs[0, 1])
+    ax_ang = fig.add_subplot(gs[1, 1], sharex=ax_lin)
+
+    sc = draw_bare_path(ax_path, od)
+    fig.colorbar(sc, ax=ax_path, orientation='horizontal', fraction=0.045, pad=0.14).set_label('time (s)')
+    ax_path.set_title('Path driven alongside a wall (odometry)')
+
+    ax_lin.step(cv[:, 0], cv[:, 1], where='post', color=BLUE, lw=1.6)
+    ax_lin.set_ylabel('linear (m/s)')
+    ax_lin.set_title('Commands sent to /cmd_vel')
+    plt.setp(ax_lin.get_xticklabels(), visible=False)
+    ax_ang.step(cv[:, 0], cv[:, 2], where='post', color=AMBER, lw=1.6)
+    ax_ang.plot(cv[turn_away, 0], cv[turn_away, 2], 'o', color=RED, ms=4, zorder=4,
+                label=f'corner turn-away ({turn_away.sum()}/{len(cv)} commands)')
+    ax_ang.set_ylabel('angular (rad/s)')
+    ax_ang.legend(loc='best', frameon=True, framealpha=0.95, fontsize=8)
+    style_time_axis(ax_ang, 'time (s)')
+
+    fig.suptitle('wall_follower_demo: following a wall (35 s)', fontsize=13, fontweight='bold', y=0.98)
+    fig.savefig(os.path.join(OUT, 'wall_follower_demo.png'), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+
+def figure_fsm_node():
+    d = read_bag('fsm_node_demo', ['/odom', '/cmd_vel', '/current_mode'])
+    t0 = d['/odom'][0][0]
+    od, cv = odom_xy(d['/odom'], t0), cmd_vel(d['/cmd_vel'], t0)
+    # fsm_node.py only publishes current_mode on a transition, not at
+    # startup, so seed the first span with its documented default state
+    # rather than leaving the time before the first message unlabeled.
+    spans = mode_spans(d['/current_mode'], t0, od[-1, 0], initial='WALL FOLLOW')
+
+    fig = plt.figure(figsize=(12.5, 5.6))
+    gs = fig.add_gridspec(3, 2, width_ratios=[1, 1], height_ratios=[1, 1, 0.28], hspace=0.14, wspace=0.25)
+    ax_path = fig.add_subplot(gs[:, 0])
+    ax_lin = fig.add_subplot(gs[0, 1])
+    ax_ang = fig.add_subplot(gs[1, 1], sharex=ax_lin)
+    ax_st = fig.add_subplot(gs[2, 1], sharex=ax_lin)
+
+    sc = draw_bare_path(ax_path, od)
+    fig.colorbar(sc, ax=ax_path, orientation='horizontal', fraction=0.045, pad=0.14).set_label('time (s)')
+    ax_path.set_title('Path driven (odometry)')
+
+    for ax in (ax_lin, ax_ang):
+        for s, e, state in spans:
+            ax.axvspan(s, e, color=STATE_COLORS[state], alpha=0.4, lw=0)
+    ax_lin.step(cv[:, 0], cv[:, 1], where='post', color=BLUE, lw=1.5)
+    ax_lin.set_ylabel('linear (m/s)')
+    ax_lin.set_title('Commands sent to /cmd_vel, by current_mode')
+    plt.setp(ax_lin.get_xticklabels(), visible=False)
+    ax_ang.step(cv[:, 0], cv[:, 2], where='post', color=AMBER, lw=1.5)
+    ax_ang.set_ylabel('angular (rad/s)')
+    plt.setp(ax_ang.get_xticklabels(), visible=False)
+
+    # fsm_node.py's mode names ("OBSTACLE AVOIDANCE") are long relative to
+    # how short some of these segments are (as little as ~5s in a 95s-wide
+    # axis) -- abbreviate just the label so text doesn't overflow into the
+    # next span the way path_following's shorter idle/following/paused/done
+    # labels never needed to.
+    abbrev = {'WALL FOLLOW': 'WALL', 'OBSTACLE AVOIDANCE': 'AVOID'}
+    for s, e, state in spans:
+        ax_st.axvspan(s, e, ymin=0.1, ymax=0.9, color=STATE_COLORS[state], ec='#9CA3AF', lw=0.8)
+        if e - s > 3:
+            ax_st.text((s + e) / 2, 0.5, abbrev.get(state, state),
+                       ha='center', va='center', fontsize=7.5, color='#1F2937')
+    ax_st.set_ylim(0, 1)
+    ax_st.set_yticks([])
+    ax_st.set_ylabel('mode', rotation=0, ha='right', va='center')
+    ax_st.grid(False)
+    style_time_axis(ax_st, 'time (s)')
+
+    fig.suptitle(f'fsm_node_demo: the gateway FSM, {len(d["/current_mode"])} transitions (95 s)',
+                 fontsize=13, fontweight='bold', y=0.99)
+    fig.savefig(os.path.join(OUT, 'fsm_node_demo.png'), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
     figure_teleop_scan()
     figure_path_following()
+    figure_drive_square()
+    figure_wall_follower()
+    figure_fsm_node()
     print('wrote', sorted(f for f in os.listdir(OUT) if f.endswith('.png')))

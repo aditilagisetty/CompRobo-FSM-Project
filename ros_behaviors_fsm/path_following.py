@@ -96,9 +96,11 @@ class PathFollower(Node):
         self.vel_pub = self.create_publisher(Twist, "cmd_vel_path_following", 10)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.path_pub = self.create_publisher(Path, "drawn_path", path_qos)
-        # lets finite_state_controller.py know whether this node currently
-        # owns cmd_vel (active or paused-but-not-done, vs idle/done), so it
-        # knows when to step back and when to resume its own driving.
+        # Reports whether this node currently owns cmd_vel (active or
+        # paused-but-not-done, vs idle/done) -- e.g. so an FSM watching this
+        # topic knows when to step back and when to resume its own driving.
+        # fsm_node.py (this project's FSM) doesn't subscribe to it; it uses
+        # current_mode instead (above) to know when to show its own GUI.
         self.status_pub = self.create_publisher(String, "path_following_status", 10)
         self.create_subscription(Odometry, "odom", self.process_odom, 10)
         self.create_subscription(LaserScan, "scan", self.process_scan, 10)

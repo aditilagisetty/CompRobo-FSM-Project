@@ -11,7 +11,7 @@ digraph Pipeline {
     path  [label="path_following.py\nGUI + pure pursuit", fillcolor="#EDE9FE", color="#7C3AED"];
     astar [label="a_star.py\ninflate obstacles, plan", fillcolor="#EDE9FE", color="#7C3AED"];
     robot [label="Neato", shape=oval, fillcolor="#DCFCE7", color="#16A34A"];
-    fsm   [label="finite_state_controller.py", fillcolor="#FEE2E2", color="#DC2626"];
+    fsm   [label="fsm_node.py", fillcolor="#FEE2E2", color="#DC2626"];
 
     user  -> tele  [label="drives"];
     tele  -> room  [label="/scan + /odom"];
@@ -19,6 +19,7 @@ digraph Pipeline {
     map   -> path  [label="loaded"];
     user  -> path  [label="draw route or\nclick goal", constraint=false];
     path  -> astar [label="goal", dir=both];
-    path  -> robot [label="/cmd_vel"];
-    path  -> fsm   [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD><FONT COLOR="#1F2937" POINT-SIZE="10.5">/path_following_status</FONT></TD></TR></TABLE>>, style=dashed, headport=w];
+    path  -> fsm   [label="cmd_vel_path_following"];
+    fsm   -> robot [label="cmd_vel"];
+    fsm   -> path  [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD><FONT COLOR="#1F2937" POINT-SIZE="10.5">current_mode (show/hide GUI)</FONT></TD></TR></TABLE>>, style=dashed, headport=w];
 }

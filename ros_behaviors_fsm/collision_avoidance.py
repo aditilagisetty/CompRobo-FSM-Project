@@ -43,10 +43,10 @@ class CollisionAvoidance(Node):
         self.influence_radius = 1.0  # meters -- obstacles farther than this are ignored
         self.k_attractive = 1.0  # TODO: tune
         # the repulsion is summed over every ray while the pull is one
-        # constant so this has to be small
-        self.k_repulsive = 0.02  # TODO: tune
-        # got from wall follower logic for proportional gain for turning net forces direction
-        self.k_steer = 1.0  # TODO: also tune -- P gain on head error
+        # constant so this has to be small.
+        self.k_repulsive = 0.02
+        # P gain on heading error
+        self.k_steer = 1.5
         self.max_angular_speed = 1.0  # rad/s
         # rotates every repulsive force vector by this much so a dead ahead
         # obstacle doesn't produce a net force that sits exactly on the
