@@ -55,8 +55,6 @@ class FSMNode(Node):
         self.bump_timeout_sec = 0.3
         self.last_bump_time = None
 
-        self.has_teleop_run = False  # Flag to check if teleop has run before
-
         # wall_follower turns away on its own once something is within
         # wall_follower_turn_distance -- that keeps front_distance hovering
         # just above obstacle_distance instead of ever crossing it, so
@@ -111,7 +109,10 @@ class FSMNode(Node):
             self.set_state("DRIVE SQUARE")
         elif key == "g":
             self.set_state("WALL FOLLOW")
-        elif key == "p" and self.has_teleop_run:
+        elif key == "p":
+            # path_following.py checks for a real map file on disk itself
+            # and refuses to start without one, so there's no need to
+            # separately gate this switch on teleop having run this session
             self.set_state("PATH FOLLOWING")
 
     def process_fsm_command(self, msg):
@@ -168,7 +169,6 @@ class FSMNode(Node):
         node if the FSM is in the "TELEOP SCAN" state."""
         if self.state == "TELEOP SCAN":
             self.vel_pub.publish(msg)
-            self.has_teleop_run = True  # Set the flag to True when teleop_scan is run
 
     def run_loop(self, msg):
         """Main loop that checks the LaserScan data to determine
