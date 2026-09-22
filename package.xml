@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>Finite state machine project combining Neato robot behaviors</description>
   <maintainer email="lagisettyaditi@gmail.com">aditilagisetty</maintainer>
-  <license>TODO: License declaration</license>
+  <license></license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
